@@ -67,6 +67,8 @@
 #include "avgspeed.h"
 // Arno, 2012-05-21: MacOS X has an Availability.h :-(
 #include "avail.h"
+#include "address.h"
+#include "Socks5Connection.h"
 
 
 namespace swift {
@@ -88,83 +90,6 @@ namespace swift {
 #define SWIFT_URI_SCHEME			"tswift"
 
 
-/** IPv4 address, just a nice wrapping around struct sockaddr_in. */
-    struct Address {
-	struct sockaddr_in  addr;
-	static uint32_t LOCALHOST;
-	void set_port (uint16_t port) {
-	    addr.sin_port = htons(port);
-	}
-	void set_port (const char* port_str) {
-	    int p;
-	    if (sscanf(port_str,"%i",&p))
-		set_port(p);
-	}
-	void set_ipv4 (uint32_t ipv4) {
-	    addr.sin_addr.s_addr = htonl(ipv4);
-	}
-	void set_ipv4 (const char* ipv4_str) ;
-	//{    inet_aton(ipv4_str,&(addr.sin_addr));    }
-	void clear () {
-	    memset(&addr,0,sizeof(struct sockaddr_in));
-	    addr.sin_family = AF_INET;
-	}
-	Address() {
-	    clear();
-	}
-	Address(const char* ip, uint16_t port)  {
-	    clear();
-	    set_ipv4(ip);
-	    set_port(port);
-	}
-	Address(const char* ip_port);
-	Address(uint16_t port) {
-	    clear();
-	    set_ipv4((uint32_t)INADDR_ANY);
-	    set_port(port);
-	}
-	Address(uint32_t ipv4addr, uint16_t port) {
-	    clear();
-	    set_ipv4(ipv4addr);
-	    set_port(port);
-	}
-	Address(const struct sockaddr_in& address) : addr(address) {}
-	uint32_t ipv4 () const { return ntohl(addr.sin_addr.s_addr); }
-	uint16_t port () const { return ntohs(addr.sin_port); }
-	operator sockaddr_in () const {return addr;}
-	bool operator == (const Address& b) const {
-	    return addr.sin_family==b.addr.sin_family &&
-		addr.sin_port==b.addr.sin_port &&
-		addr.sin_addr.s_addr==b.addr.sin_addr.s_addr;
-	}
-	const char* str () const {
-		// Arno, 2011-10-04: not thread safe, replace.
-	    static char rs[4][32];
-	    static int i;
-	    i = (i+1) & 3;
-	    sprintf(rs[i],"%i.%i.%i.%i:%i",ipv4()>>24,(ipv4()>>16)&0xff,
-		    (ipv4()>>8)&0xff,ipv4()&0xff,port());
-	    return rs[i];
-	}
-	const char* ipv4str () const {
-		// Arno, 2011-10-04: not thread safe, replace.
-	    static char rs[4][32];
-	    static int i;
-	    i = (i+1) & 3;
-	    sprintf(rs[i],"%i.%i.%i.%i",ipv4()>>24,(ipv4()>>16)&0xff,
-		    (ipv4()>>8)&0xff,ipv4()&0xff);
-	    return rs[i];
-	}
-	bool operator != (const Address& b) const { return !(*this==b); }
-	bool is_private() const {
-		// TODO IPv6
-		uint32_t no = ipv4(); uint8_t no0 = no>>24,no1 = (no>>16)&0xff;
-		if (no0 == 10) return true;
-		else if (no0 == 172 && no1 >= 16 && no1 <= 31) return true;
-		else if (no0 == 192 && no1 == 168) return true;
-		else return false;
-	}
-    };
 
 // Arno, 2011-10-03: Use libevent callback functions, no on_error?
 #define sockcb_t		event_callback_fn
@@ -204,7 +129,7 @@ namespace swift {
 
     typedef std::deque<tintbin> tbqueue;
     typedef std::deque<bin_t> binqueue;
-    typedef Address   Address;
+
 
     /** A heap (priority queue) for timestamped bin numbers (tintbins). */
     class tbheap {
@@ -501,6 +426,8 @@ namespace swift {
             CLOSE_CONTROL
         } send_control_t;
 
+        static Socks5Connection socks5_connection;
+
         static Address  tracker; // Global tracker for all transfers
         struct event *evsend_ptr_; // Arno: timer per channel // SAFECLOSE
         static struct event_base *evbase;
@@ -739,6 +666,7 @@ namespace swift {
         friend void     Shutdown (int sock_des);
         friend void     AddPeer (Address address, const Sha1Hash& root);
         friend void     SetTracker(const Address& tracker);
+//        friend void     SetSocks5Connection(const Socks5Connection& tracker);
         friend int      Open (const char*, const Sha1Hash&, std::string metadir, Address tracker, bool force_check_diskvshash, bool check_netwvshash, uint32_t chunk_size) ; // FIXME
         // SOCKTUNNEL
         friend void 	CmdGwTunnelSendUDP(struct evbuffer *evb);
@@ -958,6 +886,7 @@ namespace swift {
     int Seek(int fd, int64_t offset, int whence);
 
 	void    SetTracker(const Address& tracker);
+	void    SetSocks5Connection(const Socks5Connection& tracker);
     /** Set the default tracker that is used when Open is not passed a tracker
         address. */
 

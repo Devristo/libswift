@@ -13,6 +13,7 @@
 #include "svn-revision.h"
 #include <cfloat>
 #include <sstream>
+#include "Socks5Connection.h"
 
 using namespace swift;
 
@@ -72,6 +73,7 @@ int utf8main (int argc, char** argv)
         {"dir",     required_argument, 0, 'd'}, // SEEDDIR reuse
         {"listen",  required_argument, 0, 'l'},
         {"tracker", required_argument, 0, 't'},
+        {"proxy", required_argument, 0, 'S'},
         {"debug",   no_argument, 0, 'D'},
         {"progress",no_argument, 0, 'p'},
         {"httpgw",  required_argument, 0, 'g'},
@@ -113,8 +115,10 @@ int utf8main (int argc, char** argv)
     LibraryInit();
     Channel::evbase = event_base_new();
 
+    Address socks5Address;
+
     int c,n;
-    while ( -1 != (c = getopt_long (argc, argv, ":h:f:d:l:t:D:pg:s:c:o:u:y:z:wBNHmM:e:r:jC:1:2:3:T:n:", long_options, 0)) ) {
+    while ( -1 != (c = getopt_long (argc, argv, ":h:f:d:l:t:S:D:pg:s:c:o:u:y:z:wBNHmM:e:r:jC:1:2:3:T:n:", long_options, 0)) ) {
         switch (c) {
             case 'h':
                 if (strlen(optarg)!=40)
@@ -123,6 +127,12 @@ int utf8main (int argc, char** argv)
                 if (root_hash==Sha1Hash::ZERO)
                     quit("SHA1 hash must be 40 hex symbols\n");
                 break;
+            case 'S':
+            	socks5Address = Address(optarg);
+            	Channel::socks5_connection.open(Channel::evbase, socks5Address);
+            	printf("Opening Sock5 tunnel to %s:%d \n", socks5Address.ipv4str(), socks5Address.port());
+            	fflush(stdout); // For testing
+            	break;
             case 'f':
                 filename = strdup(optarg);
                 break;

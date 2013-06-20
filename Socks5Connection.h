@@ -20,15 +20,16 @@ struct UdpEncapsulationHeader {
 
 
 enum Socks5ConnectionState {
-		Closed,
-		HandshakeSent,
-	    MethodSelected,
-	    UdpRequestSent,
-	    UdpAssociated
+		Closed = 0,
+		HandshakeSent = 1,
+	    MethodSelected = 2,
+	    UdpRequestSent = 3,
+	    UdpAssociated = 4
 	};
 
 class Socks5Connection{
 public:
+	Socks5Connection();
 	void open(struct event_base *evbase, Address socks5_server);
 	bool isOpen();
 

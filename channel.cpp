@@ -35,6 +35,7 @@ bool Channel::SELF_CONN_OK = false;
 swift::tint Channel::TIMEOUT = TINT_SEC*60;
 channels_t Channel::channels(1);
 Address Channel::tracker;
+Socks5Connection Channel::socks5_connection;
 //tbheap Channel::send_queue;
 FILE* Channel::debug_file = NULL;
 #include "ext/simple_selector.cpp"
@@ -269,10 +270,19 @@ Address swift::BoundAddress(evutil_socket_t sock) {
 
 
 int Channel::SendTo (evutil_socket_t sock, const Address& addr, struct evbuffer *evb) {
+	Address destination = addr;
+
+	int lengthLoss = 0;
+
+	// If we have a Socks5Connection use it to tunnel data through!
+	if(Channel::socks5_connection.isOpen()){
+		lengthLoss = Channel::socks5_connection.prependHeader(addr, evb);
+		destination = Channel::socks5_connection.getBindAddress();
+	}
 
     int length = evbuffer_get_length(evb);
     int r = sendto(sock,(const char *)evbuffer_pullup(evb, length),length,0,
-                   (struct sockaddr*)&(addr.addr),sizeof(struct sockaddr_in));
+                   (struct sockaddr*)&(destination.addr),sizeof(struct sockaddr_in));
     if (r<0) {
         print_error("can't send");
         evbuffer_drain(evb, length); // Arno: behaviour is to pretend the packet got lost
@@ -280,7 +290,7 @@ int Channel::SendTo (evutil_socket_t sock, const Address& addr, struct evbuffer 
     else
     	evbuffer_drain(evb,r);
     global_dgrams_up++;
-    global_raw_bytes_up+=length;
+    global_raw_bytes_up+=length - lengthLoss;
     Time();
     return r;
 }
@@ -294,6 +304,7 @@ int Channel::RecvFrom (evutil_socket_t sock, Address& addr, struct evbuffer *evb
     }
     int length = recvfrom (sock, (char *)vec.iov_base, SWIFT_MAX_RECV_DGRAM_SIZE, 0,
 			   (struct sockaddr*)&(addr.addr), &addrlen);
+
     if (length<0) {
         length = 0;
 
@@ -318,6 +329,21 @@ int Channel::RecvFrom (evutil_socket_t sock, Address& addr, struct evbuffer *evb
         print_error("error on evbuffer_commit_space");
     }
     global_dgrams_down++;
+
+    if(Channel::socks5_connection.isOpen() && addr.port() == Channel::socks5_connection.getBindAddress().port()){
+
+    	printf("Got SOCKS5 packet from %s:%d\n", addr.ipv4str(), addr.port());
+
+    	int result = Channel::socks5_connection.unwrapDatagram(addr, evb);
+
+    	if(result > -1)
+    		length -= result;
+    } else {
+    	printf("Got NORMAL packet from %s:%d\n", addr.ipv4str(), addr.port());
+    }
+
+
+
     global_raw_bytes_down+=length;
     Time();
     return length;
@@ -339,6 +365,10 @@ void Channel::Shutdown () {
 
 void     swift::SetTracker(const Address& tracker) {
     Channel::tracker = tracker;
+}
+
+void swift::SetSocks5Connection(const Socks5Connection& tracker) {
+    Channel::socks5_connection = tracker;
 }
 
 int Channel::DecodeID(int scrambled) {

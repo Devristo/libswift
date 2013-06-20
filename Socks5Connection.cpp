@@ -195,6 +195,8 @@ int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
 				header.address.set_port(port);
 
 				evbuffer_drain(buff, 10);
+
+				return 10;
 			}
 		} else if(header.atyp == 3){ // We have a fqdn
 			mem = evbuffer_pullup(buff, 4 + 1);
@@ -220,6 +222,8 @@ int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
 				header.address.set_port(port);
 
 				evbuffer_drain(buff, 4 + 1 + domain_length + 2);
+
+				return 4 + 1 + domain_length + 2;
 			}
 
 		} else if (header.atyp == 4)
@@ -232,13 +236,13 @@ int Socks5Connection::unwrapDatagram(Address & addr, struct evbuffer * evb){
 
 	int udpHeaderRead = consumeUdpHeader(evb, header);
 
-	if(udpHeaderRead != 1)
+	if(udpHeaderRead <= 0)
 		return -1;
 
 	addr.set_ipv4(header.address.ipv4());
 	addr.set_port(header.address.port());
 
-	printf("Unwrapping Socks5 packet from %s:%d \r\n", header.address.ipv4str(),header.address.port());
+	printf("Unwrapping Socks5 packet from %s:%d\n", header.address.ipv4str(),header.address.port());
 
 	return sizeof(UdpEncapsulationHeader);
 }
@@ -299,6 +303,10 @@ void Socks5Connection::sendHandshake(struct bufferevent *bev){
 	bufferevent_write(bev, static_cast<const void *>(buff), 2UL);
 }
 
+Socks5Connection::Socks5Connection(){
+	this->state = Closed;
+}
+
 void Socks5Connection::open(struct event_base *evbase, Address socks5_server){
 	struct bufferevent *bev;
 
@@ -317,7 +325,7 @@ void Socks5Connection::open(struct event_base *evbase, Address socks5_server){
 }
 
 bool Socks5Connection::isOpen(){
-	return this->state == UdpAssociated;
+	return this->getCurrentState() == 4;
 }
 
 int Socks5Connection::prependHeader(const Address & addr, struct evbuffer * evb){
@@ -325,17 +333,19 @@ int Socks5Connection::prependHeader(const Address & addr, struct evbuffer * evb)
 	header.atyp = 1;
 	header.fragment = 0;
 
-	unsigned char buff[10];
-	memcpy(&buff, &header, 4);
-	uint32_t ipv4 = htonl(header.address.ipv4());
-	uint16_t port = htons(header.address.port());
+	unsigned char * buff = new unsigned char[10];
+	memcpy(buff, &header, 4);
+	uint32_t ipv4 = htonl(addr.ipv4());
+	uint16_t port = htons(addr.port());
 
-	memcpy(&buff + 4, &ipv4, 4);
-	memcpy(&buff + 8, &port, 2);
+	memcpy(buff + 4, &ipv4, 4);
+	memcpy(buff + 8, &port, 2);
 
 	evbuffer_prepend(evb, buff, 10);
 
-	printf("Prepending Socks5 header to UDP packet destined to %s:%d \r\n", header.address.ipv4str(),header.address.port());
+	delete buff;
+
+	//printf("Prepending Socks5 header to UDP packet destined to %s:%d \r\n", header.address.ipv4str(),header.address.port());
 
 	return 10;
 }
