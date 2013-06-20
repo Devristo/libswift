@@ -27,7 +27,7 @@ enum Socks5ConnectionState {
 	    UdpAssociated = 4
 	};
 
-class Socks5Connection{
+class Socks5Connection : public Operational{
 public:
 	Socks5Connection();
 	void open(struct event_base *evbase, Address socks5_server);

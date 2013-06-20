@@ -159,6 +159,7 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 		this->setCurrentState(UdpAssociated);
 
 		printf("Socks5 UDP proxy ready at %s:%d\n", bind_address.ipv4str(), bind_address.port());
+		this->working_ = true;
 
 //		this->setUDPsocket(AF_INET, SOCK_DGRAM, 0)
 
@@ -242,8 +243,6 @@ int Socks5Connection::unwrapDatagram(Address & addr, struct evbuffer * evb){
 	addr.set_ipv4(header.address.ipv4());
 	addr.set_port(header.address.port());
 
-	printf("Unwrapping Socks5 packet from %s:%d\n", header.address.ipv4str(),header.address.port());
-
 	return sizeof(UdpEncapsulationHeader);
 }
 
@@ -303,11 +302,13 @@ void Socks5Connection::sendHandshake(struct bufferevent *bev){
 	bufferevent_write(bev, static_cast<const void *>(buff), 2UL);
 }
 
-Socks5Connection::Socks5Connection(){
+Socks5Connection::Socks5Connection(): Operational(true){
 	this->state = Closed;
 }
 
 void Socks5Connection::open(struct event_base *evbase, Address socks5_server){
+	working_ = false;
+
 	struct bufferevent *bev;
 
 	int addrlen = sizeof(struct sockaddr_in);

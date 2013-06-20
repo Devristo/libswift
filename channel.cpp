@@ -330,16 +330,16 @@ int Channel::RecvFrom (evutil_socket_t sock, Address& addr, struct evbuffer *evb
     }
     global_dgrams_down++;
 
-    if(Channel::socks5_connection.isOpen() && addr.port() == Channel::socks5_connection.getBindAddress().port()){
-
-    	printf("Got SOCKS5 packet from %s:%d\n", addr.ipv4str(), addr.port());
-
+    // If there is a SOCKS5 connection set we need to unwrap the packet!
+    if(Channel::socks5_connection.isOpen() && addr == Channel::socks5_connection.getBindAddress()){
     	int result = Channel::socks5_connection.unwrapDatagram(addr, evb);
 
-    	if(result > -1)
+    	printf("Got SOCKS5 packet from %s:%d via proxy at %s:%d\n", addr.ipv4str(), addr.port(), Channel::socks5_connection.getBindAddress().ipv4str(), Channel::socks5_connection.getBindAddress().port());
+
+    	if(result > -1){
     		length -= result;
-    } else {
-    	printf("Got NORMAL packet from %s:%d\n", addr.ipv4str(), addr.port());
+
+    	}
     }
 
 
