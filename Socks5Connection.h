@@ -40,7 +40,7 @@ public:
 	void setBindAddress(Address address);
 
 	int tryReadHandshakeResponse(struct bufferevent *bev);
-	int tryUdpAssociateRequest(struct bufferevent *bev);
+	void tryUdpAssociateRequest(struct bufferevent *bev);
 	int tryReadUdpAssociateResponse(struct bufferevent *bev);
 
 	int unwrapDatagram(Address& addr, struct evbuffer *evb);

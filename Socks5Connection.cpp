@@ -63,7 +63,7 @@ int Socks5Connection::tryReadHandshakeResponse(struct bufferevent * bev){
 
 }
 
-int Socks5Connection::tryUdpAssociateRequest(struct bufferevent * bev){
+void Socks5Connection::tryUdpAssociateRequest(struct bufferevent * bev){
 	unsigned char mem[10];
 	mem[0] = 5;		// Version
 	mem[1] = 3;		// UDP ASSOCIATE
@@ -132,7 +132,7 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 				return 0;
 			else {
 				unsigned char domain_length = mem[4];
-				char domain[domain_length] ;
+				char * domain = new char[domain_length] ;
 				uint16_t port;
 
 				mem = evbuffer_pullup(buff, 4 + 1 + domain_length + 2); // Pull up domain and port
@@ -149,6 +149,7 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 				bind_address.set_port(port);
 
 				evbuffer_drain(buff, 4 + 1 + domain_length + 2);
+				delete [] domain;
 			}
 
 		} else if (mem[3] == 4)
@@ -165,6 +166,8 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 
 		return 1;
 	}
+	
+	return 0;
 }
 
 int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
@@ -206,7 +209,7 @@ int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
 				return 0;
 			else {
 				unsigned char domain_length = mem[4];
-				char domain[domain_length] ;
+				char * domain = new char[domain_length] ;
 				uint16_t port;
 
 				mem = evbuffer_pullup(buff, 4 + 1 + domain_length + 2); // Pull up domain and port
@@ -223,6 +226,7 @@ int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
 				header.address.set_port(port);
 
 				evbuffer_drain(buff, 4 + 1 + domain_length + 2);
+				delete [] domain;
 
 				return 4 + 1 + domain_length + 2;
 			}
