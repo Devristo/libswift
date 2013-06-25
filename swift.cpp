@@ -382,6 +382,7 @@ int utf8main (int argc, char** argv)
 			fprintf(stderr,"  -m, --printurl\tcompose URL from tracker, file and chunksize\n");
 			fprintf(stderr,"  -M, --multifile\tcreate multi-file spec with given files\n");
 			fprintf(stderr,"  -n, --metadir\tdir for .m* files\n");
+			fprintf(stderr,"  -S, --proxy\tthe SOCKS5 proxy to use in host:port format\n");
 			fprintf(stderr, "%s\n", SubversionRevisionString.c_str() );
 			return 1;
 		}
