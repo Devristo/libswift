@@ -67,7 +67,7 @@ if sys.platform == "win32":
      # Set libs to link to
      # Advapi32.lib for CryptGenRandom in evutil_rand.obj
     libs = ['ws2_32','libevent','Advapi32'] 
-    if DEBUG:
+    #if DEBUG:
         libs += ['gtestd']
         
     # Update lib search path
@@ -77,7 +77,9 @@ if sys.platform == "win32":
         libpath += '\\build\\gtest-1.4.0\\msvc\\gtest\\Debug;'
 
     # Somehow linker can't find uuid.lib
-    libpath += 'C:\\Program Files\\Microsoft SDKs\\Windows\\v6.0A\\Lib;'
+	libpath += 'C:\\Program Files\\Microsoft SDKs\\Windows\\v6.0A\\Lib;'
+	libpath += 'C:\\Program Files (x86)\\Microsoft SDKs\\Windows\\v7.1A\\Lib;'
+	libpath += 'C:\\Program Files\\Microsoft SDKs\\Windows\\v7.1A\\Lib;'
     
     # TODO: Make the swift.exe a Windows program not a Console program
     if not DEBUG:
