@@ -67,8 +67,9 @@ if sys.platform == "win32":
      # Set libs to link to
      # Advapi32.lib for CryptGenRandom in evutil_rand.obj
     libs = ['ws2_32','libevent','Advapi32'] 
-    #if DEBUG:
-        libs += ['gtestd']
+    
+	#if DEBUG:
+    #    libs += ['gtestd']
         
     # Update lib search path
     libpath = os.environ.get('LIBPATH','')
