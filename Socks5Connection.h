@@ -45,6 +45,12 @@ public:
 
 	int unwrapDatagram(Address& addr, struct evbuffer *evb);
 	int prependHeader(const Address& addr, struct evbuffer *evb);
+	
+	static void buffered_on_event(struct bufferevent *bev, short int what, void* cbarg);
+	static void buffered_on_write(struct bufferevent *bev, void *cbarg);
+	static void buffered_on_read(struct bufferevent *bev, void *cbarg);
+
+	int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header);
 
 private:
 	Socks5ConnectionState state;

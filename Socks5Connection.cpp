@@ -170,7 +170,7 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 	return 0;
 }
 
-int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
+int Socks5Connection::consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
 	unsigned char * mem = evbuffer_pullup(buff,4);
 
 	if(mem == NULL){
@@ -253,7 +253,7 @@ int Socks5Connection::unwrapDatagram(Address & addr, struct evbuffer * evb){
 /**
  * Called by libevent when there is data to read.
  */
-static void buffered_on_read(struct bufferevent *bev, void *cbarg) {
+void Socks5Connection::buffered_on_read(struct bufferevent *bev, void *cbarg) {
 
 	Socks5Connection *s5 = static_cast<Socks5Connection *>(cbarg);
 
@@ -272,7 +272,7 @@ static void buffered_on_read(struct bufferevent *bev, void *cbarg) {
  * Called by libevent when the write buffer reaches 0.  We only
  * provide this because libevent expects it, but we don't use it.
  */
-static void buffered_on_write(struct bufferevent *bev, void *cbarg) {
+void Socks5Connection::buffered_on_write(struct bufferevent *bev, void *cbarg) {
 
 }
 
@@ -280,7 +280,7 @@ static void buffered_on_write(struct bufferevent *bev, void *cbarg) {
  * Called by libevent when the write buffer reaches 0.  We only
  * provide this because libevent expects it, but we don't use it.
  */
-static void buffered_on_event(struct bufferevent *bev, short int what, void* cbarg) {
+void Socks5Connection::buffered_on_event(struct bufferevent *bev, short int what, void* cbarg) {
 
 	// Sock5 server closed the connection!
 	if((what & BEV_EVENT_EOF) ==  BEV_EVENT_EOF){
