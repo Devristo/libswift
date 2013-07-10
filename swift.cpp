@@ -19,6 +19,7 @@
 
 #include "svn-revision.h"
 #include "swarmmanager.h"
+#include "Socks5Connection.h"
 
 using namespace swift;
 
@@ -47,6 +48,7 @@ void usage(void)
     fprintf(stderr,"  -l, --listen\t[ip:|host:]port to listen to (default: random). MUST set for IPv6\n");
     fprintf(stderr,"  -t, --tracker\t[ip:|host:]port of the tracker (default: none). IPv6 between [] cf. RFC2732\n");
     fprintf(stderr,"  -D, --debug\tfile name for debugging logs (default: stdout)\n");
+	fprintf(stderr,"  -S, --proxy\tthe SOCKS5 proxy to use in host:port format\n");
     fprintf(stderr,"  -B\tdebugging logs to stdout (win32 hack)\n");
     fprintf(stderr,"  -p, --progress\treport transfer progress\n");
     fprintf(stderr,"  -g, --httpgw\t[ip:|host:]port to bind HTTP content gateway to (no default)\n");
@@ -140,6 +142,7 @@ int utf8main (int argc, char** argv)
         {"dir",     required_argument, 0, 'd'}, // SEEDDIR reuse
         {"listen",  required_argument, 0, 'l'},
         {"tracker", required_argument, 0, 't'},
+		{"proxy", required_argument, 0, 'S'},
         {"debug",   no_argument, 0, 'D'},
         {"progress",no_argument, 0, 'p'},
         {"httpgw",  required_argument, 0, 'g'},
@@ -179,6 +182,8 @@ int utf8main (int argc, char** argv)
     LibraryInit();
     Channel::evbase = event_base_new();
 
+	Address socks5Address;
+	
     int c,n;
     while ( -1 != (c = getopt_long (argc, argv, ":h:f:d:l:t:D:pg:s:c:o:u:y:z:wBNHmM:e:r:ji:kC:1:2:3:T:G", long_options, 0)) ) {
         switch (c) {
@@ -189,6 +194,12 @@ int utf8main (int argc, char** argv)
                 if (root_hash==Sha1Hash::ZERO)
                     quit("SHA1 hash must be 40 hex symbols\n");
                 break;
+			case 'S':
+				socks5Address = Address(optarg);
+				Channel::socks5_connection.open(Channel::evbase, socks5Address);
+				printf("Opening Sock5 tunnel to %s:%d \n", socks5Address.ipstr(), socks5Address.port());
+				fflush(stdout); // For testing
+				break;
             case 'f':
                 filename = strdup(optarg);
                 break;

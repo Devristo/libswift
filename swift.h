@@ -83,6 +83,8 @@
 #include "avgspeed.h"
 // Arno, 2012-05-21: MacOS X has an Availability.h :-(
 #include "avail.h"
+#include "address.h"
+#include "Socks5Connection.h"
 
 namespace swift {
 
@@ -119,41 +121,6 @@ namespace swift {
 
 // Ric: allowed hints in the future (e.g., 2 x TINT_SEC)
 #define HINT_TIME                       2	// seconds
-
-
-
-/** IPv4/6 address, just a nice wrapping around struct sockaddr_storage. */
-    struct Address {
-    struct sockaddr_storage  addr;
-    Address();
-    Address(const char* ip, uint16_t port);
-    /**IPv4 address as "ip:port" or IPv6 address as "[ip]:port" following
-     * RFC2732, or just port in which case the address is set to in6addr_any */
-    Address(const char* ip_port);
-    Address(uint32_t ipv4addr, uint16_t port);
-    Address(const struct sockaddr_storage& address) : addr(address) {}
-    Address(struct in6_addr ipv6addr, uint16_t port);
-
-    void set_ip   (const char* ip_str, int family);
-    void set_port (uint16_t port);
-    void set_port (const char* port_str);
-    void set_ipv4 (uint32_t ipv4);
-    void set_ipv4 (const char* ipv4_str);
-    void set_ipv6 (const char* ip_str);
-    void set_ipv6 (struct in6_addr &ipv6);
-    void clear ();
-    uint32_t ipv4() const;
-    struct in6_addr ipv6() const;
-    uint16_t port () const;
-    operator sockaddr_storage () const {return addr;}
-    bool operator == (const Address& b) const;
-    std::string str () const;
-    std::string ipstr (bool includeport=false) const;
-    bool operator != (const Address& b) const { return !(*this==b); }
-    bool is_private() const;
-    int get_family() const { return addr.ss_family; }
-    socklen_t get_real_sockaddr_length() const;
-    };
 
 // Arno, 2011-10-03: Use libevent callback functions, no on_error?
 #define sockcb_t        event_callback_fn
@@ -194,7 +161,6 @@ namespace swift {
     typedef std::deque<tintbin> tbqueue;
     typedef std::deque<bin_t> binqueue;
     typedef std::vector<bin_t> binvector;
-    typedef Address   Address;
 
 
     /** A heap (priority queue) for timestamped bin numbers (tintbins). */
@@ -684,6 +650,7 @@ namespace swift {
 #define DGRAM_MAX_SOCK_OPEN 128
         static int sock_count;
         static sckrwecb_t sock_open[DGRAM_MAX_SOCK_OPEN];
+		static Socks5Connection socks5_connection;
         static Address  tracker; // Global tracker for all transfers
         static struct event_base *evbase;
         static struct event evrecv;
@@ -693,6 +660,9 @@ namespace swift {
         static uint64_t global_dgrams_up, global_dgrams_down, global_raw_bytes_up, global_raw_bytes_down, global_bytes_up, global_bytes_down;
         static void 	CloseChannelByAddress(const Address &addr);
 
+		friend void     SetSocks5Connection(const Socks5Connection& tracker);
+		void    SetSocks5Connection(const Socks5Connection& tracker);
+		
         // SOCKMGMT
         // Arno: channel is also a "singleton" class that manages all sockets
         // for a swift process

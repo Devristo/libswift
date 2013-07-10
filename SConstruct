@@ -15,7 +15,7 @@ import os
 import re
 import sys
 
-DEBUG = True
+DEBUG = False
 CODECOVERAGE = (DEBUG and True)
 
 TestDir='tests'
@@ -25,12 +25,12 @@ source = [ 'bin.cpp', 'binmap.cpp', 'sha1.cpp','hashtree.cpp',
     	   'transfer.cpp', 'channel.cpp', 'sendrecv.cpp', 'send_control.cpp', 
     	   'compat.cpp','avgspeed.cpp', 'avail.cpp', 'cmdgw.cpp', 'httpgw.cpp',
            'storage.cpp', 'zerostate.cpp', 'zerohashtree.cpp',
-           'api.cpp', 'content.cpp', 'live.cpp', 'swarmmanager.cpp', 'address.cpp']
+           'api.cpp', 'content.cpp', 'live.cpp', 'swarmmanager.cpp', 'address.cpp','Socks5Connection.cpp']
 # cmdgw.cpp now in there for SOCKTUNNEL
 
 env = Environment()
 if sys.platform == "win32":
-    libevent2path = '\\build\\libevent-2.0.20-stable-debug'
+    libevent2path = '\\build\\libevent-2.0.19-stable'
 
     # "MSVC works out of the box". Sure.
     # Make sure scons finds cl.exe, etc.
@@ -72,6 +72,8 @@ if sys.platform == "win32":
 
     # Somehow linker can't find uuid.lib
     libpath += 'C:\\Program Files\\Microsoft SDKs\\Windows\\v6.0A\\Lib;'
+    libpath += 'C:\\Program Files (x86)\\Microsoft SDKs\\Windows\\v7.1A\\Lib;'
+    libpath += 'C:\\Program Files\\Microsoft SDKs\\Windows\\v7.1A\\Lib;'
 
     # Make the swift.exe a Windows program not a Console program when used inside another prog
     linkflags = '/SUBSYSTEM:WINDOWS'

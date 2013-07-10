@@ -1875,7 +1875,10 @@ void Channel::Reschedule () {
  * Channel class methods
  */
 void Channel::LibeventSendCallback(int fd, short event, void *arg) {
-
+	if(!socks5_connection.IsOperational())
+		return;
+	
+	
     // Called by libevent when it is the requested send time.
     Time();
     dprintf("%s send callback\n",tintstr() );
