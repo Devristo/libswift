@@ -19,6 +19,7 @@
 
 #include "svn-revision.h"
 #include "swarmmanager.h"
+#include "Socks5Connection.h"
 
 using namespace swift;
 
@@ -47,6 +48,7 @@ void usage(void)
     fprintf(stderr,"  -l, --listen\t[ip:|host:]port to listen to (default: random). MUST set for IPv6\n");
     fprintf(stderr,"  -t, --tracker\t[ip:|host:]port of the tracker (default: none). IPv6 between [] cf. RFC2732\n");
     fprintf(stderr,"  -D, --debug\tfile name for debugging logs (default: stdout)\n");
+	fprintf(stderr,"  -S, --proxy\tthe SOCKS5 proxy to use in host:port format\n");
     fprintf(stderr,"  -B\tdebugging logs to stdout (win32 hack)\n");
     fprintf(stderr,"  -p, --progress\treport transfer progress\n");
     fprintf(stderr,"  -g, --httpgw\t[ip:|host:]port to bind HTTP content gateway to (no default)\n");
@@ -77,6 +79,7 @@ int HandleSwiftFile(std::string filename, Sha1Hash root_hash, Address &tracker, 
 int OpenSwiftFile(std::string filename, const Sha1Hash& hash, Address tracker, bool force_check_diskvshash, uint32_t chunk_size, bool livestream, bool activate);
 int OpenSwiftDirectory(std::string dirname, Address tracker, bool force_check_diskvshash, uint32_t chunk_size, bool activate);
 void HandleLiveSource(std::string livesource_input, std::string filename, Sha1Hash root_hash);
+void AttemptCheckpoint();
 
 void ReportCallback(int fd, short event, void *arg);
 void EndCallback(int fd, short event, void *arg);
@@ -120,6 +123,8 @@ Address tracker;
 std::string livesource_input = "";
 LiveTransfer *livesource_lt = NULL;
 FILE *livesource_filep=NULL;
+// Arno, 2013-05-13: fread blocks till requested number of items is read, want non-blocking
+int livesource_fd=-1;
 struct evbuffer *livesource_evb = NULL;
 
 long long int cmdgw_report_counter=0;
@@ -137,6 +142,7 @@ int utf8main (int argc, char** argv)
         {"dir",     required_argument, 0, 'd'}, // SEEDDIR reuse
         {"listen",  required_argument, 0, 'l'},
         {"tracker", required_argument, 0, 't'},
+		{"proxy", required_argument, 0, 'S'},
         {"debug",   no_argument, 0, 'D'},
         {"progress",no_argument, 0, 'p'},
         {"httpgw",  required_argument, 0, 'g'},
@@ -176,6 +182,8 @@ int utf8main (int argc, char** argv)
     LibraryInit();
     Channel::evbase = event_base_new();
 
+	Address socks5Address;
+	
     int c,n;
     while ( -1 != (c = getopt_long (argc, argv, ":h:f:d:l:t:D:pg:s:c:o:u:y:z:wBNHmM:e:r:ji:kC:1:2:3:T:G", long_options, 0)) ) {
         switch (c) {
@@ -186,6 +194,12 @@ int utf8main (int argc, char** argv)
                 if (root_hash==Sha1Hash::ZERO)
                     quit("SHA1 hash must be 40 hex symbols\n");
                 break;
+			case 'S':
+				socks5Address = Address(optarg);
+				Channel::socks5_connection.open(Channel::evbase, socks5Address);
+				printf("Opening Sock5 tunnel to %s:%d \n", socks5Address.ipstr(), socks5Address.port());
+				fflush(stdout); // For testing
+				break;
             case 'f':
                 filename = strdup(optarg);
                 break;
@@ -481,6 +495,8 @@ int utf8main (int argc, char** argv)
         // event_base_loopexit() was called, shutting down
     }
 
+    AttemptCheckpoint();
+
     // Arno, 2012-01-03: Close all transfers
     tdlist_t tds = GetTransferDescriptors();
     tdlist_t::iterator iter;
@@ -653,7 +669,7 @@ void HandleLiveSource(std::string livesource_input, std::string filename, Sha1Ha
     {
         // Source is file or pipe
         if (livesource_input == "-")
-            livesource_filep = stdin; // aka read from shell pipe
+            livesource_fd = 0; // aka read from shell pipe
 
         else if (livesource_input.substr(0,pipescheme.length()) == pipescheme) {
             // Source is program output
@@ -661,7 +677,7 @@ void HandleLiveSource(std::string livesource_input, std::string filename, Sha1Ha
 #ifdef WIN32
             livesource_filep = _popen( program.c_str(), "rb" );
             if (livesource_filep == NULL)
-            quit("live: file: popen failed" );
+                quit("live: file: popen failed" );
 
             fprintf(stderr,"live: pipe: Reading from %s\n", program.c_str() );
 #else
@@ -670,8 +686,10 @@ void HandleLiveSource(std::string livesource_input, std::string filename, Sha1Ha
         }
         else {
             // Source is file
-            livesource_filep = fopen(livesource_input.c_str(),"rb");
-            if (livesource_filep == NULL)
+            // Arno, 2013-05-13: fread blocks till requested number of items is read, want non-blocking
+            livesource_fd = open_utf8(livesource_input.c_str(),ROOPENFLAGS,S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
+
+            if (livesource_fd == -1)
                 quit("live: Could not open source input");
         }
 
@@ -727,6 +745,20 @@ void HandleLiveSource(std::string livesource_input, std::string filename, Sha1Ha
 
 
 
+void AttemptCheckpoint()
+{
+    if (swift::ttype(single_td) == FILE_TRANSFER && file_enable_checkpoint && !file_checkpointed && swift::IsComplete(single_td))
+    {
+	std::string binmap_filename = swift::GetOSPathName(single_td);
+	binmap_filename.append(".mbinmap");
+	fprintf(stderr,"swift: Complete, checkpointing %s\n", binmap_filename.c_str() );
+
+	if (swift::Checkpoint(single_td) >= 0)
+	    file_checkpointed = true;
+    }
+}
+
+
 void ReportCallback(int fd, short event, void *arg) {
     // Called every second to print/calc some stats
     // Arno, 2012-05-24: Why-oh-why, update NOW
@@ -743,8 +775,17 @@ void ReportCallback(int fd, short event, void *arg) {
                 Channel::global_dgrams_up, Channel::global_raw_bytes_up,
                 Channel::global_dgrams_down, Channel::global_raw_bytes_down );
 
-		fprintf(stderr,"upload %lf\n",swift::GetCurrentSpeed(single_td,DDIR_UPLOAD));
-		fprintf(stderr,"dwload %lf\n",swift::GetCurrentSpeed(single_td,DDIR_DOWNLOAD));
+        double up = swift::GetCurrentSpeed(single_td,DDIR_UPLOAD);
+        double dw = swift::GetCurrentSpeed(single_td,DDIR_DOWNLOAD);
+        if (up/1048576 > 1)
+            fprintf(stderr,"upload %.2f MB/s (%lf B/s)\n", up/(1<<20), up);
+        else
+            fprintf(stderr,"upload %.2f KB/s (%lf B/s)\n", up/(1<<10), up);
+        if (dw/1048576 > 1)
+            fprintf(stderr,"dwload %.2f MB/s (%lf B/s)\n", dw/(1<<20), dw);
+        else
+            fprintf(stderr,"dwload %.2f KB/s (%lf B/s)\n", dw/(1<<10), dw);
+
 		// Ric: remove. LEDBAT tests
 		Channel* c = swift::Channel::channel(1);
 		if (c!=NULL) {
@@ -754,16 +795,8 @@ void ReportCallback(int fd, short event, void *arg) {
 		//fprintf(stderr,"npeers %d\n",ft->GetNumLeechers()+ft->GetNumSeeders() );
 	}
 
-	if (swift::ttype(single_td) == FILE_TRANSFER && file_enable_checkpoint && !file_checkpointed && swift::IsComplete(single_td))
-	{
-	    std::string binmap_filename = swift::GetOSPathName(single_td);
-	    binmap_filename.append(".mbinmap");
-	    fprintf(stderr,"swift: Complete, checkpointing %s\n", binmap_filename.c_str() );
 
-	    if (swift::Checkpoint(single_td) >= 0)
-		file_checkpointed = true;
-        }
-
+        AttemptCheckpoint();
 
         if (exitoncomplete && swift::IsComplete(single_td))
             // Download and stop mode
@@ -791,6 +824,11 @@ void ReportCallback(int fd, short event, void *arg) {
             ContentTransfer *ct = swift::GetActivatedTransfer(td);
             if (ct != NULL)
         	nactive++;
+            double up = swift::GetCurrentSpeed(td,DDIR_UPLOAD);
+            if (up/1048576 > 1)
+                fprintf(stderr,"%d: upload %.2f MB/s\t", td, up/(1<<20));
+            else
+                fprintf(stderr,"%d: upload %.2f KB/s\t", td, up/(1<<10));
         }
         /*
         fprintf(stderr,
@@ -940,10 +978,13 @@ void LiveSourceFileTimerCallback(int fd, short event, void *arg) {
 
     fprintf(stderr,"live: file: timer\n");
 
-    int nread = fread(buf,sizeof(char),sizeof(buf),livesource_filep);
-    fprintf(stderr,"live: file: read returned %d\n", nread );
-
-    if (nread < -1)
+    int nread = -1;
+    if (livesource_filep != NULL)
+        nread = fread(buf,sizeof(char),sizeof(buf),livesource_filep);
+    else
+        nread = read(livesource_fd,buf,sizeof(buf));
+    fprintf(stderr,"%s live: file: read returned %d\n", tintstr(), nread );
+    if (nread <= -1)
         print_error("error reading from live source");
     else if (nread > 0)
     {

@@ -37,6 +37,7 @@ channels_t Channel::channels(1);
 Address Channel::tracker;
 FILE* Channel::debug_file = NULL;
 tint Channel::MIN_PEX_REQUEST_INTERVAL = TINT_SEC;
+Socks5Connection Channel::socks5_connection;
 
 /*
  * Instance methods
@@ -68,7 +69,8 @@ Channel::Channel(ContentTransfer* transfer, int socket, Address peer_addr,bool p
     scheduled4del_(false),
     direct_sending_(false),
     peer_is_source_(peerissource),
-    hs_out_(NULL), hs_in_(NULL)
+    hs_out_(NULL), hs_in_(NULL),
+    rtt_hint_tintbin_()
 {
     if (peer_==Address())
         peer_ = tracker;
@@ -172,6 +174,7 @@ bool Channel::IsComplete() {
 
 uint16_t Channel::GetMyPort() {
     Address addr;
+    // Arno, 2013-06-05: Retrieving addr, so use largest possible sockaddr
     socklen_t addrlen = sizeof(struct sockaddr_storage);
     if (getsockname(socket_, (struct sockaddr *)&addr.addr, &addrlen) < 0)
     {
@@ -255,7 +258,8 @@ tint Channel::Time () {
 evutil_socket_t Channel::Bind (Address address, sckrwecb_t callbacks) {
     struct sockaddr_storage sa = address;
     evutil_socket_t fd;
-    int len = sizeof(struct sockaddr_storage), sndbuf=1<<20, rcvbuf=1<<20;
+    // Arno, 2013-06-05: MacOS X bind fails if sizeof(struct sockaddr_storage) is passed.
+    int len = address.get_real_sockaddr_length(), sndbuf=1<<20, rcvbuf=1<<20;
     #define dbnd_ensure(x) { if (!(x)) { \
         print_error("binding fails"); close_socket(fd); return INVALID_SOCKET; } }
     dbnd_ensure ( (fd = socket(address.get_family(), SOCK_DGRAM, 0)) >= 0 );
@@ -283,7 +287,8 @@ evutil_socket_t Channel::Bind (Address address, sckrwecb_t callbacks) {
 Address Channel::BoundAddress(evutil_socket_t sock) {
 
     struct sockaddr_storage myaddr;
-    socklen_t mylen = sizeof(myaddr);
+    // Arno, 2013-06-05: Retrieving addr, so use largest possible sockaddr
+    socklen_t mylen = sizeof(struct sockaddr_storage);
     int ret = getsockname(sock,(sockaddr*)&myaddr,&mylen);
     if (ret >= 0) {
         return Address(myaddr);
@@ -300,9 +305,19 @@ Address swift::BoundAddress(evutil_socket_t sock) {
 
 
 int Channel::SendTo (evutil_socket_t sock, const Address& addr, struct evbuffer *evb) {
+	Address destination = addr;
+
+	int lengthLoss = 0;
+
+	// If we have a Socks5Connection use it to tunnel data through!
+	if(Channel::socks5_connection.isOpen()){
+		lengthLoss = Channel::socks5_connection.prependHeader(addr, evb);
+		destination = Channel::socks5_connection.getBindAddress();
+	}
+	
     int length = evbuffer_get_length(evb);
     int r = sendto(sock,(const char *)evbuffer_pullup(evb, length),length,0,
-                   (struct sockaddr*)&(addr.addr),sizeof(struct sockaddr_storage));
+                   (struct sockaddr*)&(destination.addr),destination.get_real_sockaddr_length());
     // SCHAAP: 2012-06-16 - How about EAGAIN and EWOULDBLOCK? Do we just drop the packet then as well?
     if (r<0) {
         print_error("can't send");
@@ -311,12 +326,13 @@ int Channel::SendTo (evutil_socket_t sock, const Address& addr, struct evbuffer 
     else
         evbuffer_drain(evb,r);
     global_dgrams_up++;
-    global_raw_bytes_up+=length;
+    global_raw_bytes_up+=length - lengthLoss;
     Time();
     return r;
 }
 
 int Channel::RecvFrom (evutil_socket_t sock, Address& addr, struct evbuffer *evb) {
+    // Arno, 2013-06-05: Incoming addr, so use largest possible sockaddr
     socklen_t addrlen = sizeof(struct sockaddr_storage);
     struct evbuffer_iovec vec;
     if (evbuffer_reserve_space(evb, SWIFT_MAX_RECV_DGRAM_SIZE, &vec, 1) < 0) {
@@ -349,11 +365,27 @@ int Channel::RecvFrom (evutil_socket_t sock, Address& addr, struct evbuffer *evb
         print_error("error on evbuffer_commit_space");
     }
     global_dgrams_down++;
+	
+	// If there is a SOCKS5 connection set we need to unwrap the packet!
+    if(Channel::socks5_connection.isOpen() && addr == Channel::socks5_connection.getBindAddress()){
+    	int result = Channel::socks5_connection.unwrapDatagram(addr, evb);
+
+    	printf("Got SOCKS5 packet from %s:%d via proxy at %s:%d\n", addr.ipstr(), addr.port(), Channel::socks5_connection.getBindAddress().ipstr(), Channel::socks5_connection.getBindAddress().port());
+
+    	if(result > -1){
+    		length -= result;
+
+    	}
+    }
+	
     global_raw_bytes_down+=length;
     Time();
     return length;
 }
 
+void swift::SetSocks5Connection(const Socks5Connection& tracker) {
+    Channel::socks5_connection = tracker;
+}
 
 void Channel::CloseSocket(evutil_socket_t sock) {
     for(int i=0; i<sock_count; i++)

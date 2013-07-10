@@ -6,19 +6,13 @@
  *  Copyright 2010-2012 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
-#include <iostream>
-#include <sstream>
-
-//MEMLEAK
-#ifndef WIN32
-#include <malloc.h>
-#endif
-
 #include "swift.h"
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
 #include <event2/listener.h>
 
+#include <iostream>
+#include <sstream>
 
 using namespace swift;
 
@@ -653,7 +647,7 @@ void CmdGwNewRequestCallback(evutil_socket_t cmdsock, char *line)
     // New command received from user
 
     // CMD request line
-    char *copyline = (char *)malloc(strlen(line)+1);
+    char *copyline = new char[strlen(line)+1];
     strcpy(copyline,line);
 
     int ret = CmdGwHandleCommand(cmdsock,copyline);
@@ -675,7 +669,7 @@ void CmdGwNewRequestCallback(evutil_socket_t cmdsock, char *line)
 	}
     }
 
-    free(copyline);
+    delete copyline;
 }
 
 
@@ -1046,7 +1040,7 @@ bool InstallCmdGateway (struct event_base *evbase,Address cmdaddr,Address httpad
 
     cmd_evlistener = evconnlistener_new_bind(evbase, CmdGwNewConnectionCallback, NULL,
         LEV_OPT_CLOSE_ON_FREE|LEV_OPT_REUSEABLE, -1,
-        (const struct sockaddr *)&sin, sizeof(sin));
+        (const struct sockaddr *)&sin, cmdaddr.get_real_sockaddr_length());
     if (!cmd_evlistener) {
         print_error("Couldn't create listener");
         return false;

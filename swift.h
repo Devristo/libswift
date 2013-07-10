@@ -18,7 +18,7 @@
  *  loaded into memory. In particular, content and hashes are read directly
  *  from disk.
  *
- *  Created by Victor Grishchenko, Arno Bakker
+ *  Created by Victor Grishchenko, Arno Bakker, Riccardo Petrocco
  *  Copyright 2009-2016 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
@@ -64,6 +64,8 @@
 #ifndef SWIFT_H
 #define SWIFT_H
 
+// Arno, 2013-06-11: Must come first to ensure SIZE_MAX etc are defined
+#include "compat.h"
 #include <deque>
 #include <vector>
 #include <set>
@@ -72,7 +74,6 @@
 #include <algorithm>
 #include <string>
 
-#include "compat.h"
 #include <event2/event.h>
 #include <event2/event_struct.h>
 #include <event2/buffer.h>
@@ -82,6 +83,8 @@
 #include "avgspeed.h"
 // Arno, 2012-05-21: MacOS X has an Availability.h :-(
 #include "avail.h"
+#include "address.h"
+#include "Socks5Connection.h"
 
 namespace swift {
 
@@ -97,7 +100,11 @@ namespace swift {
 #define bytes2layer(bn,cs)  (int)log2(  ((double)bn)/((double)cs) )
 
 
+// Arno, 2012-12-12: Configure which PPSP version to use by default. Set to 0 for legacy swift.
 #define ENABLE_IETF_PPSP_VERSION      1
+
+// Whether to try legacy protocol when PPSP handshakes don't result in response
+#define ENABLE_FALLBACK_TO_LEGACY_PROTO	0
 
 // Arno, 2011-12-22: Enable Riccardo's VodPiecePicker
 #define ENABLE_VOD_PIECEPICKER        1
@@ -112,38 +119,8 @@ namespace swift {
 // Max size of a X.509 certificate in a PEX_REScert message.
 #define PEX_RES_MAX_CERT_SIZE		     1024
 
-
-/** IPv4/6 address, just a nice wrapping around struct sockaddr_storage. */
-    struct Address {
-    struct sockaddr_storage  addr;
-    Address();
-    Address(const char* ip, uint16_t port);
-    /**IPv4 address as "ip:port" or IPv6 address as "[ip]:port" following
-     * RFC2732, or just port in which case the address is set to in6addr_any */
-    Address(const char* ip_port);
-    Address(uint32_t ipv4addr, uint16_t port);
-    Address(const struct sockaddr_storage& address) : addr(address) {}
-    Address(struct in6_addr ipv6addr, uint16_t port);
-
-    void set_ip   (const char* ip_str, int family);
-    void set_port (uint16_t port);
-    void set_port (const char* port_str);
-    void set_ipv4 (uint32_t ipv4);
-    void set_ipv4 (const char* ipv4_str);
-    void set_ipv6 (const char* ip_str);
-    void set_ipv6 (struct in6_addr &ipv6);
-    void clear ();
-    uint32_t ipv4() const;
-    struct in6_addr ipv6() const;
-    uint16_t port () const;
-    operator sockaddr_storage () const {return addr;}
-    bool operator == (const Address& b) const;
-    std::string str () const;
-    std::string ipstr (bool includeport=false) const;
-    bool operator != (const Address& b) const { return !(*this==b); }
-    bool is_private() const;
-    int get_family() const { return addr.ss_family; }
-    };
+// Ric: allowed hints in the future (e.g., 2 x TINT_SEC)
+#define HINT_TIME                       2	// seconds
 
 // Arno, 2011-10-03: Use libevent callback functions, no on_error?
 #define sockcb_t        event_callback_fn
@@ -184,7 +161,6 @@ namespace swift {
     typedef std::deque<tintbin> tbqueue;
     typedef std::deque<bin_t> binqueue;
     typedef std::vector<bin_t> binvector;
-    typedef Address   Address;
 
 
     /** A heap (priority queue) for timestamped bin numbers (tintbins). */
@@ -315,9 +291,9 @@ namespace swift {
     {
       public:
 #if ENABLE_IETF_PPSP_VERSION == 1
-	Handshake() : version_(VER_PPSPP_v1), min_version_(VER_PPSPP_v1), merkle_func_(POPT_MERKLE_HASH_FUNC_SHA1), chunk_addr_(POPT_CHUNK_ADDR_CHUNK32), live_sig_alg_(POPT_LIVE_SIG_ALG_PRIVATEDNS), live_disc_wnd_(POPT_LIVE_DISC_WND_ALL), swarm_id_ptr_(NULL) {}
+	Handshake() : version_(VER_PPSPP_v1), min_version_(VER_PPSPP_v1), merkle_func_(POPT_MERKLE_HASH_FUNC_SHA1), live_sig_alg_(POPT_LIVE_SIG_ALG_PRIVATEDNS), chunk_addr_(POPT_CHUNK_ADDR_CHUNK32), live_disc_wnd_(POPT_LIVE_DISC_WND_ALL), swarm_id_ptr_(NULL) {}
 #else
-	Handshake() : version_(VER_SWIFT_LEGACY), min_version_(VER_SWIFT_LEGACY), merkle_func_(POPT_MERKLE_HASH_FUNC_SHA1), chunk_addr_(POPT_CHUNK_ADDR_BIN32), live_sig_alg_(POPT_LIVE_SIG_ALG_PRIVATEDNS), live_disc_wnd_(POPT_LIVE_DISC_WND_ALL), swarm_id_ptr_(NULL) {}
+	Handshake() : version_(VER_SWIFT_LEGACY), min_version_(VER_SWIFT_LEGACY), merkle_func_(POPT_MERKLE_HASH_FUNC_SHA1), live_sig_alg_(POPT_LIVE_SIG_ALG_PRIVATEDNS), chunk_addr_(POPT_CHUNK_ADDR_BIN32), live_disc_wnd_(POPT_LIVE_DISC_WND_ALL), swarm_id_ptr_(NULL) {}
 #endif
 	~Handshake() { ReleaseSwarmID(); }
 	void SetSwarmID(Sha1Hash &swarmid) { swarm_id_ptr_ = new Sha1Hash(swarmid); }
@@ -414,6 +390,8 @@ namespace swift {
         void            OnSendData(int n);
         /** Arno: Call when no bytes are sent due to rate limiting. */
         void            OnSendNoData();
+        /** Ric:  Call when no bytes are received. */
+        void            OnRecvNoData();
         /** Arno: Return current speed for the given direction in bytes/s */
         double          GetCurrentSpeed(data_direction_t ddir);
         /** Arno: Return maximum speed for the given direction in bytes/s */
@@ -435,6 +413,10 @@ namespace swift {
         /** Add a peer to the set of addresses to connect to */
         void            AddPeer(Address &peer);
 
+        /** Ric: add number of hints for slow start scenario */
+        void            SetSlowStartHints(uint32_t hints) { slow_start_hints_ += hints; }
+        /** Ric: get the # of slow start hints */
+        uint32_t        GetSlowStartHints() { return slow_start_hints_; }
 
         /** Arno: set the tracker for this transfer. Reseting it won't kill
          * any existing connections. */
@@ -471,14 +453,17 @@ namespace swift {
         // RATELIMIT
         MovingAverageSpeed    cur_speed_[2];
         double          max_speed_[2];
-        int             speedzerocount_;
-
+        uint32_t        speedupcount_;
+        uint32_t        speeddwcount_;
         // MULTIFILE
         Storage         *storage_;
 
         Address         tracker_; // Tracker for this transfer
         tint            tracker_retry_interval_;
         tint            tracker_retry_time_;
+
+        // Ric: slow start 4 requesting hints
+        uint32_t        slow_start_hints_;
 
     };
 
@@ -665,6 +650,7 @@ namespace swift {
 #define DGRAM_MAX_SOCK_OPEN 128
         static int sock_count;
         static sckrwecb_t sock_open[DGRAM_MAX_SOCK_OPEN];
+		static Socks5Connection socks5_connection;
         static Address  tracker; // Global tracker for all transfers
         static struct event_base *evbase;
         static struct event evrecv;
@@ -674,6 +660,9 @@ namespace swift {
         static uint64_t global_dgrams_up, global_dgrams_down, global_raw_bytes_up, global_raw_bytes_down, global_bytes_up, global_bytes_down;
         static void 	CloseChannelByAddress(const Address &addr);
 
+		friend void     SetSocks5Connection(const Socks5Connection& tracker);
+		void    SetSocks5Connection(const Socks5Connection& tracker);
+		
         // SOCKMGMT
         // Arno: channel is also a "singleton" class that manages all sockets
         // for a swift process
@@ -833,7 +822,7 @@ namespace swift {
         binmap_t    have_out_;
         /**    Transmit schedule: in most cases filled with the peer's hints */
         tbqueue     hint_in_;
-        uint64_t	hint_in_size_;
+        uint64_t    hint_in_size_;
         /** Hints sent (to detect and reschedule ignored hints). */
         tbqueue     hint_out_;
         uint64_t    hint_out_size_;
@@ -908,6 +897,9 @@ namespace swift {
         Handshake   *hs_out_;
         /** Handshake I got from peer. */
         Handshake   *hs_in_;
+
+        // RTTCS
+        tintbin	    rtt_hint_tintbin_;
 
         int         PeerBPS() const { return TINT_SEC / dip_avg_ * 1024; }
         /** Get a request for one packet from the queue of peer's requests. */
