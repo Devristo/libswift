@@ -63,7 +63,7 @@ int Socks5Connection::tryReadHandshakeResponse(struct bufferevent * bev){
 
 }
 
-int Socks5Connection::tryUdpAssociateRequest(struct bufferevent * bev){
+void Socks5Connection::tryUdpAssociateRequest(struct bufferevent * bev){
 	unsigned char mem[10];
 	mem[0] = 5;		// Version
 	mem[1] = 3;		// UDP ASSOCIATE
@@ -132,7 +132,7 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 				return 0;
 			else {
 				unsigned char domain_length = mem[4];
-				char domain[domain_length] ;
+				char * domain = new char[domain_length] ;
 				uint16_t port;
 
 				mem = evbuffer_pullup(buff, 4 + 1 + domain_length + 2); // Pull up domain and port
@@ -149,6 +149,7 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 				bind_address.set_port(port);
 
 				evbuffer_drain(buff, 4 + 1 + domain_length + 2);
+				delete [] domain;
 			}
 
 		} else if (mem[3] == 4)
@@ -165,9 +166,11 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 
 		return 1;
 	}
+	
+	return 0;
 }
 
-int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
+int Socks5Connection::consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
 	unsigned char * mem = evbuffer_pullup(buff,4);
 
 	if(mem == NULL){
@@ -206,7 +209,7 @@ int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
 				return 0;
 			else {
 				unsigned char domain_length = mem[4];
-				char domain[domain_length] ;
+				char * domain = new char[domain_length] ;
 				uint16_t port;
 
 				mem = evbuffer_pullup(buff, 4 + 1 + domain_length + 2); // Pull up domain and port
@@ -223,6 +226,7 @@ int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header){
 				header.address.set_port(port);
 
 				evbuffer_drain(buff, 4 + 1 + domain_length + 2);
+				delete [] domain;
 
 				return 4 + 1 + domain_length + 2;
 			}
@@ -249,7 +253,7 @@ int Socks5Connection::unwrapDatagram(Address & addr, struct evbuffer * evb){
 /**
  * Called by libevent when there is data to read.
  */
-static void buffered_on_read(struct bufferevent *bev, void *cbarg) {
+void Socks5Connection::buffered_on_read(struct bufferevent *bev, void *cbarg) {
 
 	Socks5Connection *s5 = static_cast<Socks5Connection *>(cbarg);
 
@@ -268,7 +272,7 @@ static void buffered_on_read(struct bufferevent *bev, void *cbarg) {
  * Called by libevent when the write buffer reaches 0.  We only
  * provide this because libevent expects it, but we don't use it.
  */
-static void buffered_on_write(struct bufferevent *bev, void *cbarg) {
+void Socks5Connection::buffered_on_write(struct bufferevent *bev, void *cbarg) {
 
 }
 
@@ -276,7 +280,7 @@ static void buffered_on_write(struct bufferevent *bev, void *cbarg) {
  * Called by libevent when the write buffer reaches 0.  We only
  * provide this because libevent expects it, but we don't use it.
  */
-static void buffered_on_event(struct bufferevent *bev, short int what, void* cbarg) {
+void Socks5Connection::buffered_on_event(struct bufferevent *bev, short int what, void* cbarg) {
 
 	// Sock5 server closed the connection!
 	if((what & BEV_EVENT_EOF) ==  BEV_EVENT_EOF){
