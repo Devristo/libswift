@@ -30,6 +30,8 @@ enum Socks5ConnectionState {
 class Socks5Connection : public Operational{
 public:
 	Socks5Connection();
+	~Socks5Connection();
+
 	void open(struct event_base *evbase, Address socks5_server);
 	bool isOpen();
 
@@ -50,6 +52,7 @@ private:
 	Socks5ConnectionState state;
 	void sendHandshake(struct bufferevent *bev);
 	Address bind_address;
+	struct bufferevent * bev;
 };
 
 typedef Socks5Connection   Socks5Connection;
