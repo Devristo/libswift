@@ -315,11 +315,10 @@ void Socks5Connection::open(struct event_base *evbase, Address socks5_server){
 	printf("Opening Sock5 tunnel to %s:%d \n", socks5_server.ipstr().c_str(), socks5_server.port());
 	working_ = false;
 
-	struct bufferevent *bev;
 
 	int addrlen = sizeof(struct sockaddr_in);
 
-	bev = bufferevent_socket_new(evbase, -1, BEV_OPT_CLOSE_ON_FREE);
+	this->bev = bufferevent_socket_new(evbase, -1, BEV_OPT_CLOSE_ON_FREE);
 	bufferevent_setcb(bev, buffered_on_read, buffered_on_write, buffered_on_event, this);
 	bufferevent_enable(bev, EV_READ|EV_WRITE);
 
