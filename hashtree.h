@@ -45,7 +45,7 @@ struct Sha1Hash {
 // for values up to 8192. Above that you'll have to edit the
 // SWIFT_MAX_SEND_DGRAM_SIZE in swift.h
 //
-#define SWIFT_DEFAULT_CHUNK_SIZE 1024
+#define SWIFT_DEFAULT_CHUNK_SIZE 6144
 
 
 class Storage;
