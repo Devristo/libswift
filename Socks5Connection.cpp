@@ -81,6 +81,7 @@ void Socks5Connection::tryUdpAssociateRequest(struct bufferevent * bev){
 
 	bufferevent_write(bev, static_cast<const void *>(mem), 10);
 	this->setCurrentState(UdpRequestSent);
+	printf("SOCKS5 UDP request sent\n");
 }
 
 void Socks5Connection::setBindAddress(Address address){
@@ -159,7 +160,7 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 		this->setBindAddress(bind_address);
 		this->setCurrentState(UdpAssociated);
 
-		printf("Socks5 UDP proxy ready at %s:%d\n", bind_address.ipstr(), bind_address.port());
+		printf("Socks5 UDP proxy ready at %s:%d\n", bind_address.ipstr().c_str(), bind_address.port());
 		this->working_ = true;
 
 //		this->setUDPsocket(AF_INET, SOCK_DGRAM, 0)
@@ -247,14 +248,14 @@ int Socks5Connection::unwrapDatagram(Address & addr, struct evbuffer * evb){
 	addr.set_ipv4(header.address.ipv4());
 	addr.set_port(header.address.port());
 
-	return sizeof(UdpEncapsulationHeader);
+	return udpHeaderRead;
 }
 
 /**
  * Called by libevent when there is data to read.
  */
 void Socks5Connection::buffered_on_read(struct bufferevent *bev, void *cbarg) {
-
+	printf("Got SOCKS5 data\n");
 	Socks5Connection *s5 = static_cast<Socks5Connection *>(cbarg);
 
 	switch(s5->getCurrentState()){
@@ -285,7 +286,7 @@ void Socks5Connection::buffered_on_event(struct bufferevent *bev, short int what
 	// Sock5 server closed the connection!
 	if((what & BEV_EVENT_EOF) ==  BEV_EVENT_EOF){
 		Socks5Connection * s5 = static_cast<Socks5Connection *> (cbarg);
-		s5->setCurrentState(Closed);
+		//s5->setCurrentState(Closed);
 	}
 
 	// Sock5 server closed the connection!
@@ -311,6 +312,7 @@ Socks5Connection::Socks5Connection(): Operational(true){
 }
 
 void Socks5Connection::open(struct event_base *evbase, Address socks5_server){
+	printf("Opening Sock5 tunnel to %s:%d \n", socks5_server.ipstr().c_str(), socks5_server.port());
 	working_ = false;
 
 	struct bufferevent *bev;
@@ -321,13 +323,24 @@ void Socks5Connection::open(struct event_base *evbase, Address socks5_server){
 	bufferevent_setcb(bev, buffered_on_read, buffered_on_write, buffered_on_event, this);
 	bufferevent_enable(bev, EV_READ|EV_WRITE);
 
-	if(bufferevent_socket_connect(bev, (struct sockaddr*)&(socks5_server.addr), addrlen))
-		errorOut("Cannot connect!");
+	if(bufferevent_socket_connect(bev, (struct sockaddr*)&(socks5_server.addr), addrlen)){
+		printf("Cannot connect to SOCKS5 proxy at %s\n",socks5_server.ipstr(true).c_str());
+		bufferevent_free(bev);
 
-
-	sendHandshake(bev);
-	this->setCurrentState(HandshakeSent);
+	    return;
+	} else {
+		sendHandshake(bev);
+		this->setCurrentState(HandshakeSent);
+		printf("SOCKS5 handshake sent");
+	}
 }
+
+Socks5Connection::~Socks5Connection(){
+  if(this->isOpen()){
+    bufferevent_free(bev);
+    this->state = Closed;
+  }
+ }
 
 bool Socks5Connection::isOpen(){
 	return this->getCurrentState() == 4;

@@ -185,7 +185,7 @@ int utf8main (int argc, char** argv)
 	Address socks5Address;
 	
     int c,n;
-    while ( -1 != (c = getopt_long (argc, argv, ":h:f:d:l:t:D:pg:s:c:o:u:y:z:wBNHmM:e:r:ji:kC:1:2:3:T:G", long_options, 0)) ) {
+    while ( -1 != (c = getopt_long (argc, argv, ":h:f:d:l:t:S:D:pg:s:c:o:u:y:z:wBNHmM:e:r:ji:kC:1:2:3:T:G", long_options, 0)) ) {
         switch (c) {
             case 'h':
                 if (strlen(optarg)!=40)
@@ -197,7 +197,6 @@ int utf8main (int argc, char** argv)
 			case 'S':
 				socks5Address = Address(optarg);
 				Channel::socks5_connection.open(Channel::evbase, socks5Address);
-				printf("Opening Sock5 tunnel to %s:%d \n", socks5Address.ipstr(), socks5Address.port());
 				fflush(stdout); // For testing
 				break;
             case 'f':

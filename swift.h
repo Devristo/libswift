@@ -659,9 +659,6 @@ namespace swift {
         static tint     epoch, start;
         static uint64_t global_dgrams_up, global_dgrams_down, global_raw_bytes_up, global_raw_bytes_down, global_bytes_up, global_bytes_down;
         static void 	CloseChannelByAddress(const Address &addr);
-
-		friend void     SetSocks5Connection(const Socks5Connection& tracker);
-		void    SetSocks5Connection(const Socks5Connection& tracker);
 		
         // SOCKMGMT
         // Arno: channel is also a "singleton" class that manages all sockets
@@ -1142,6 +1139,7 @@ namespace swift {
     /** Set the default tracker that is used when Open is not passed a tracker
         address. */
     void    SetTracker( const Address& tracker);
+    void    SetSocks5Connection(const Socks5Connection& tracker);
     /** Returns size of the file in bytes, 0 if unknown. Might be rounded up
         to a kilobyte before the transmission is complete. */
     uint64_t Size( int td);

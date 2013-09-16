@@ -313,6 +313,8 @@ int Channel::SendTo (evutil_socket_t sock, const Address& addr, struct evbuffer 
 	if(Channel::socks5_connection.isOpen()){
 		lengthLoss = Channel::socks5_connection.prependHeader(addr, evb);
 		destination = Channel::socks5_connection.getBindAddress();
+	} else if(Channel::socks5_connection.getBindAddress() != Address()){
+		printf("ERROR: Sending to %s:%d WITHOUT socks5\n", destination.ipstr(false).c_str(), destination.port());
 	}
 	
     int length = evbuffer_get_length(evb);
@@ -367,15 +369,20 @@ int Channel::RecvFrom (evutil_socket_t sock, Address& addr, struct evbuffer *evb
     global_dgrams_down++;
 	
 	// If there is a SOCKS5 connection set we need to unwrap the packet!
-    if(Channel::socks5_connection.isOpen() && addr == Channel::socks5_connection.getBindAddress()){
+    if(addr == Channel::socks5_connection.getBindAddress()){
     	int result = Channel::socks5_connection.unwrapDatagram(addr, evb);
 
-    	printf("Got SOCKS5 packet from %s:%d via proxy at %s:%d\n", addr.ipstr(), addr.port(), Channel::socks5_connection.getBindAddress().ipstr(), Channel::socks5_connection.getBindAddress().port());
+    	// printf("Got SOCKS5 packet from %s:%d via proxy at %s:%d\n", addr.ipstr().c_str(), addr.port(), Channel::socks5_connection.getBindAddress().ipstr().c_str(), Channel::socks5_connection.getBindAddress().port());
 
     	if(result > -1){
     		length -= result;
 
+    //        printf("Got %d byte packet from %s:%d via SOCKS5 proxy at %s:%d\n", length, addr.ipv4str(), addr.port(), socks5_connection.getBindAddress().ipv4str(), socks5_connection.getBindAddress().port());
+    	} else{
+    		printf("Got corrupted SOCKS5 packet from %s:%d\n", socks5_connection.getBindAddress().ipstr(false).c_str(), socks5_connection.getBindAddress().port());
     	}
+	} else if(Channel::socks5_connection.getBindAddress() != Address()){
+          printf("Got %d bytes NON SOCKS5 from %s:%d\n", length, addr.ipstr(false).c_str(), addr.port());
     }
 	
     global_raw_bytes_down+=length;
