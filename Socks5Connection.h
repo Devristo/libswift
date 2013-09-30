@@ -53,12 +53,16 @@ public:
 	static void buffered_on_read(struct bufferevent *bev, void *cbarg);
 
 	int consumeUdpHeader(struct evbuffer *buff, UdpEncapsulationHeader& header);
+	void connect();
 
 private:
+	struct event_base * eb;
 	Socks5ConnectionState state;
 	void sendHandshake(struct bufferevent *bev);
 	Address bind_address;
+	Address address;
 	struct bufferevent * bev;
+	static void retryOpen(evutil_socket_t fd, short what, void *arg);
 };
 
 typedef Socks5Connection   Socks5Connection;

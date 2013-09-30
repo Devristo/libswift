@@ -276,10 +276,12 @@ void Socks5Connection::buffered_on_write(struct bufferevent *bev, void *cbarg) {
 
 }
 
-/**
- * Called by libevent when the write buffer reaches 0.  We only
- * provide this because libevent expects it, but we don't use it.
- */
+void Socks5Connection::retryOpen(evutil_socket_t fd, short what, void *cbarg){
+	fprintf(stderr, "Retrying SOCKS5 connection\n");
+	Socks5Connection * s5 = static_cast<Socks5Connection *> (cbarg);
+	s5->connect();
+}
+
 void Socks5Connection::buffered_on_event(struct bufferevent *bev, short int what, void* cbarg) {
 
 	// Sock5 server closed the connection!
@@ -290,10 +292,17 @@ void Socks5Connection::buffered_on_event(struct bufferevent *bev, short int what
 
 	// Sock5 server closed the connection!
 	if((what & BEV_EVENT_ERROR) ==  BEV_EVENT_ERROR){
+		bufferevent_free(bev);
+
 		Socks5Connection * s5 = static_cast<Socks5Connection *> (cbarg);
 		s5->setCurrentState(Closed);
+		struct event * ev = new event;
 
-		errorOut("Error occurred =(");
+		evtimer_assign(ev, s5->eb, Socks5Connection::retryOpen, s5);
+		evtimer_add(ev, tint2tv(5*TINT_SEC));
+
+
+		fprintf(stderr, "Connection closed, reopen in 5 seconds\n");
 	}
 }
 
@@ -310,17 +319,15 @@ Socks5Connection::Socks5Connection(): Operational(true){
 	this->state = Closed;
 }
 
-void Socks5Connection::open(struct event_base *evbase, Address socks5_server){
-	working_ = false;
-
+void Socks5Connection::connect(){
 	int addrlen = sizeof(struct sockaddr_in);
 
-	bev = bufferevent_socket_new(evbase, -1, BEV_OPT_CLOSE_ON_FREE);
+	bev = bufferevent_socket_new(eb, -1, BEV_OPT_CLOSE_ON_FREE);
 	bufferevent_setcb(bev, buffered_on_read, buffered_on_write, buffered_on_event, this);
 	bufferevent_enable(bev, EV_READ|EV_WRITE);
 
-	if(bufferevent_socket_connect(bev, (struct sockaddr*)&(socks5_server.addr), addrlen)){
-		errorOut("Cannot connect to SOCKS5 proxy at %s:%d\n",socks5_server.ipv4str(), socks5_server.port());
+	if(bufferevent_socket_connect(bev, (struct sockaddr*)&(address.addr), addrlen)){
+		errorOut("Cannot connect to SOCKS5 proxy at %s:%d\n",address.ipv4str(), address.port());
 		bufferevent_free(bev);
 
 		return;
@@ -328,6 +335,14 @@ void Socks5Connection::open(struct event_base *evbase, Address socks5_server){
 		sendHandshake(bev);
 		this->setCurrentState(HandshakeSent);
 	}
+}
+
+void Socks5Connection::open(struct event_base *evbase, Address socks5_server){
+	working_ = false;
+	address = socks5_server;
+	eb = evbase;
+
+	connect();
 }
 
 Socks5Connection::~Socks5Connection(){

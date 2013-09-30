@@ -345,7 +345,7 @@ int Channel::RecvFrom (evutil_socket_t sock, Address& addr, struct evbuffer *evb
     		printf("Got corrupted SOCKS5 packet from %s:%d\n", socks5_connection.getBindAddress().ipv4str(), socks5_connection.getBindAddress().port());
     	}
     } else if(Channel::socks5_connection.getBindAddress() != Address()){
-    	printf("Got %d bytes NON SOCKS5 from %s:%d\n", length, addr.ipv4str(), addr.port());
+    	//fprintf(stderr, "Got %d bytes NON SOCKS5 from %s:%d\n", length, addr.ipv4str(), addr.port());
     }
 
 
