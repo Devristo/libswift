@@ -27,6 +27,7 @@
 
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
+#include "swift.h"
 
 using namespace swift;
 
@@ -41,6 +42,9 @@ Socks5ConnectionState Socks5Connection::getCurrentState(){
 
 void Socks5Connection::setCurrentState(Socks5ConnectionState state){
 	this->state = state;
+
+	working_ = state == UdpAssociated;
+
 }
 
 int Socks5Connection::tryReadHandshakeResponse(struct bufferevent * bev){
@@ -160,7 +164,6 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 		this->setCurrentState(UdpAssociated);
 
 		printf("Socks5 UDP proxy ready at %s:%d\n", bind_address.ipv4str(), bind_address.port());
-		this->working_ = true;
 
 //		this->setUDPsocket(AF_INET, SOCK_DGRAM, 0)
 
@@ -283,15 +286,8 @@ void Socks5Connection::retryOpen(evutil_socket_t fd, short what, void *cbarg){
 }
 
 void Socks5Connection::buffered_on_event(struct bufferevent *bev, short int what, void* cbarg) {
-
 	// Sock5 server closed the connection!
-	if((what & BEV_EVENT_EOF) ==  BEV_EVENT_EOF){
-		Socks5Connection * s5 = static_cast<Socks5Connection *> (cbarg);
-		//s5->setCurrentState(Closed);
-	}
-
-	// Sock5 server closed the connection!
-	if((what & BEV_EVENT_ERROR) ==  BEV_EVENT_ERROR){
+	if((what & BEV_EVENT_ERROR) ==  BEV_EVENT_ERROR || (what & BEV_EVENT_EOF) == BEV_EVENT_EOF){
 		bufferevent_free(bev);
 
 		Socks5Connection * s5 = static_cast<Socks5Connection *> (cbarg);
@@ -303,6 +299,7 @@ void Socks5Connection::buffered_on_event(struct bufferevent *bev, short int what
 
 
 		fprintf(stderr, "Connection closed, reopen in 5 seconds\n");
+		Channel::ReinitiateChannels();
 	}
 }
 

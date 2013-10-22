@@ -438,6 +438,8 @@ namespace swift {
 	    static uint64_t global_dgrams_up, global_dgrams_down, global_raw_bytes_up, global_raw_bytes_down, global_bytes_up, global_bytes_down;
         static void CloseChannelByAddress(const Address &addr);
 
+        static void ReinitiateChannels();
+
         // SOCKMGMT
         // Arno: channel is also a "singleton" class that manages all sockets
         // for a swift process

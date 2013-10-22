@@ -173,6 +173,7 @@ void    Channel::AddHandshake (struct evbuffer *evb) {
 
 
 void    Channel::Send () {
+//	fprintf(stderr, "Send called is_established() = %d", is_established());
 
 	dprintf("%s #%u Send called \n",tintstr(),id_);
 
@@ -1152,6 +1153,20 @@ void Channel::CloseChannelByAddress(const Address &addr)
     }
 }
 
+void Channel::ReinitiateChannels()
+{
+	channels_t::iterator iter;
+	for (iter = channels.begin(); iter != channels.end(); iter++)
+	{
+		Channel *c = *iter;
+		if (c != NULL)
+		{
+			// c->peer_channel_id_ = 0; // established->false, do no more sending
+			c->own_id_mentioned_ = false;
+			c->send_control_ = PING_PONG_CONTROL;
+		}
+	}
+}
 
 void Channel::Close () {
 
