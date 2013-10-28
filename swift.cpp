@@ -180,7 +180,7 @@ int utf8main (int argc, char** argv)
     Channel::evbase = event_base_new();
 
     int c,n;
-    while ( -1 != (c = getopt_long (argc, argv, ":h:f:d:l:t:D:pg:s:c:o:u:y:z:wBNHmM:e:r:ji:kC:1:2:3:T:G", long_options, 0)) ) {
+    while ( -1 != (c = getopt_long (argc, argv, ":h:f:d:l:t:D:L:pg:s:c:o:u:y:z:wBNHmM:e:r:ji:kC:1:2:3:T:G", long_options, 0)) ) {
         switch (c) {
             case 'h':
                 if (strlen(optarg)!=40)
@@ -209,6 +209,9 @@ int utf8main (int argc, char** argv)
                 break;
             case 'D':
                 Channel::debug_file = optarg ? fopen_utf8(optarg,"a") : stderr;
+                break;
+            case 'L':
+                Channel::debug_ledbat = optarg ? fopen_utf8(optarg,"a") : stderr;
                 break;
             // Arno hack: get opt diff Win32 doesn't allow -D without arg
             case 'B':

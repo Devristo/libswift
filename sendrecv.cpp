@@ -257,6 +257,8 @@ void    Channel::Send () {
 
     dprintf("%s #%u Send called \n",tintstr(),id_);
 
+    lprintf("%d \t %d \n", NOW, NOW-last_send_time_);
+
     struct evbuffer *evb = evbuffer_new();
     uint32_t pcid = 0;
     if (hs_in_ != NULL)
@@ -1919,6 +1921,7 @@ void Channel::Reschedule () {
             else
                 dprintf("%s #%u cannot requeue for %s, closed\n",tintstr(),id_,tintstr(next_send_time_));
         }
+
     } else {
         // SAFECLOSE
         dprintf("%s #%u resched, will close\n",tintstr(),id_);
