@@ -269,6 +269,7 @@ void    Channel::Send () {
             lprintf("%d \t %d \t %d \t %d \t %d \t %d \n", NOW, 0, NOW-last_send_time_, 0, 0, 0);
             break;
         case AIMD_CONTROL:
+            lprintf("%d \t %d \t %d \t %d \t %d \t %d \n", NOW, 0, 0, NOW-last_send_time_, 0, 0);
             break;
         case LEDBAT_CONTROL:
             lprintf("%d \t %d \t %d \t %d \t %d \t %d \n", NOW, 0, 0, NOW-last_send_time_, 0, 0);

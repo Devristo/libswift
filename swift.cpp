@@ -338,7 +338,8 @@ int utf8main (int argc, char** argv)
 
     }   // arguments parsed
 
-    lprintf("time\tping_pong\tslow_start\tledbat\tkeep-alive\tclose\n");
+    //lprintf("time\tping_pong\tslow_start\tmain_cc\tkeep-alive\tclose\n");
+
     // Change dir to destdir, if set, or to tempdir if HTTPGW
     if (destdir == "") {
         if (httpgw_enabled) {
