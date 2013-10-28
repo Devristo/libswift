@@ -257,7 +257,29 @@ void    Channel::Send () {
 
     dprintf("%s #%u Send called \n",tintstr(),id_);
 
-    lprintf("%d \t %d \n", NOW, NOW-last_send_time_);
+    // test
+    switch (send_control_) {
+        case KEEP_ALIVE_CONTROL:
+            lprintf("%d \t %d \t %d \t %d \t %d \t %d \n", NOW, 0, 0, 0, NOW-last_send_time_, 0);
+            break;
+        case PING_PONG_CONTROL:
+            lprintf("%d \t %d \t %d \t %d \t %d \t %d \n", NOW, NOW-last_send_time_, 0, 0, 0, 0);
+            break;
+        case SLOW_START_CONTROL:
+            lprintf("%d \t %d \t %d \t %d \t %d \t %d \n", NOW, 0, NOW-last_send_time_, 0, 0, 0);
+            break;
+        case AIMD_CONTROL:
+            break;
+        case LEDBAT_CONTROL:
+            lprintf("%d \t %d \t %d \t %d \t %d \t %d \n", NOW, 0, 0, NOW-last_send_time_, 0, 0);
+            break;
+        case CLOSE_CONTROL:
+            lprintf("%d \t %d \t %d \t %d \t %d \t %d \n", NOW, 0, 0, 0, 0, NOW-last_send_time_);
+            break;
+        default:
+            assert(false);
+            break;
+    }
 
     struct evbuffer *evb = evbuffer_new();
     uint32_t pcid = 0;
