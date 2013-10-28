@@ -231,9 +231,9 @@ tint Channel::LedbatNextSendTime () {
 
         // test
         tint now = NOW;
-        for (int i = -1; i<2; i++) {
-            lprintf("%d \t %d \t %d \t %d \t %d \t %d \t %d \n", now + (i*100000), 0, 0, 0, 0, 0, 6000);
-        }
+        //for (int i = -1; i<2; i++) {
+            lprintf("%d \t %d \t %d \t %d \t %d \t %d \t %d \n", now, 0, 0, 0, 0, 0, 6000);
+        //}
 
         cwnd_count1_ = 0;
         for(int i=0; i<4; i++) {
