@@ -1,0 +1,193 @@
+# Written by Victor Grishchenko, Arno Bakker, Elric Milon 
+# see LICENSE.txt for license information
+
+import sys
+import os
+
+Import("DEBUG")
+Import("CODECOVERAGE")
+Import("env")
+Import("libs")
+Import("linkflags")
+
+if sys.platform == "win32":
+	gtestpath = "\\build\\gtest-1.6.0"
+else:
+	gtestpath = "../build/gtest-1.6.0"
+
+if DEBUG and sys.platform == "win32":
+	libs = ['libswift','gtestd'] + libs  # order is important, crypto needs to be last
+else:
+	libs = ['libswift','gtest'] + libs  # order is important, crypto needs to be last
+
+cpppath = env["CPPPATH"].split(os.pathsep)
+cpppath.append('..')
+cpppath.append(gtestpath)
+cpppath.append(os.path.join(gtestpath,"include"))
+
+libpath = env["LIBPATH"].split(os.pathsep)
+libpath.append('..')
+libpath.append(".")
+
+if CODECOVERAGE and sys.platform == "linux2":
+    #Enable profiling
+    env.Append(CXXFLAGS="-fprofile-arcs -ftest-coverage -g")
+    linkflags += " -lgcov -fprofile-arcs"
+    env.Append(LINKFLAGS=linkflags);
+
+if sys.platform == "win32":
+	libpath.append( gtestpath+'\\msvc\\gtest\\Debug' )
+else:
+	libpath.append( gtestpath+'/lib' )
+
+
+env.Append(CPPPATH=cpppath)
+env.Append(LIBPATH=libpath)
+
+env.StaticLibrary(
+    target="gtest",
+    source=[os.path.join(gtestpath,"src","gtest-all.cc")],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath)
+
+env.Program( 
+    target='addrtest',
+    source=['addrtest.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='binstest2',
+    source=['binstest2.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='binstest3',
+    source=['binstest3.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='binstest4',
+    source=['binstest4.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='chunkaddrtest',
+    source=['chunkaddrtest.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+
+env.Program( 
+    target='binfragtest',
+    source=['binfragtest.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='dgramtest',
+    source=['dgramtest.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='hashtest',
+    source=['hashtest.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+# Arno: must be rewritten to libevent
+#env.Program( 
+#    target='ledbattest',
+#    source=['ledbattest.cpp'],
+#    CPPPATH=cpppath,
+#    LIBS=libs,
+#    LIBPATH=libpath )
+
+# Arno: must be rewritten to libevent
+#if sys.platform != "win32":
+#    # Arno: Needs getopt
+#    env.Program( 
+#        target='ledbattest2',
+#        source=['ledbattest2.cpp'],
+#        CPPPATH=cpppath,
+#        LIBS=libs,
+#        LIBPATH=libpath )
+
+env.Program( 
+    target='freemap',
+    source=['freemap.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='bin64test',
+    source=['bin64test.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='transfertest',
+    source=['transfertest.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='connecttest',
+    source=['connecttest.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='apitest',
+    source=['apitest.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='binstest5',
+    source=['binstest5.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+env.Program( 
+    target='availtest',
+    source=['availtest.cpp'],
+    CPPPATH=cpppath,
+    LIBS=libs,
+    LIBPATH=libpath )
+
+if DEBUG and sys.platform == "linux2":
+	scxxflags = "" 
+	if 'CXXFLAGS' in env:
+	    scxxflags = env["CXXFLAGS"]
+	
+	import shutil
+	shutil.copyfile(os.path.join('..','swift.cpp'),'swift4gtest.cpp')
+	
+	env.Program( 
+	    target='swift4gtest',
+	    source=['swift4gtest.cpp'],
+	    CXXFLAGS=scxxflags+["-DSWIFTGTEST"],
+	    CPPPATH=cpppath,
+	    LIBS=libs,
+	    LIBPATH=libpath )
+    
