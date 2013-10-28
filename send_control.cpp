@@ -228,6 +228,13 @@ tint Channel::LedbatNextSendTime () {
     if (cwnd_count1_ > 10)
     {
         dprintf("%s #%u sendctrl ledbat stuck, reset\n",tintstr(),id() );
+
+        // test
+        tint now = NOW;
+        for (int i = -1; i<2; i++) {
+            lprintf("%d \t %d \t %d \t %d \t %d \t %d \t %d \n", now + (i*1000000), 0, 0, 0, 0, 0, 6000);
+        }
+
         cwnd_count1_ = 0;
         for(int i=0; i<4; i++) {
             owd_min_bins_[i] = TINT_NEVER;
