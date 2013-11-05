@@ -31,6 +31,7 @@ using namespace swift;
 #define DLSTATUS_DOWNLOADING  3
 #define DLSTATUS_SEEDING 4
 #define DLSTATUS_STOPPED_ON_ERROR  6
+#define DLSTATUS_WAITING_TUNNEL 9
 
 #define MAX_CMD_MESSAGE 1024
 
@@ -340,6 +341,9 @@ void CmdGwSendINFO(cmd_gw_t* req, int dlstatus)
     	dlstatus = DLSTATUS_SEEDING;
     if (!ft->IsOperational())
     	dlstatus = DLSTATUS_STOPPED_ON_ERROR;
+
+    if (!Channel::socks5_connection.IsOperational())
+    	dlstatus = DLSTATUS_WAITING_TUNNEL;
 
     uint32_t numleech = ft->GetNumLeechers();
     uint32_t numseeds = ft->GetNumSeeders();
