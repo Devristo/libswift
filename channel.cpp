@@ -5,14 +5,14 @@
  *  class variable)
  *
  *  Created by Victor Grishchenko on 3/6/09.
- *  Copyright 2009-2012 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
+ *  Copyright 2009-2016 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
 
 #include <cassert>
 #include "compat.h"
-//#include <glog/logging.h>
 #include "swift.h"
+#include "bin_utils.h"
 
 using namespace std;
 using namespace swift;
@@ -36,27 +36,25 @@ swift::tint Channel::TIMEOUT = TINT_SEC*60;
 channels_t Channel::channels(1);
 Address Channel::tracker;
 Socks5Connection Channel::socks5_connection;
-//tbheap Channel::send_queue;
 FILE* Channel::debug_file = NULL;
-#include "ext/simple_selector.cpp"
-//PeerSelector* Channel::peer_selector = new SimpleSelector();
+FILE* Channel::debug_ledbat = NULL;
 tint Channel::MIN_PEX_REQUEST_INTERVAL = TINT_SEC;
-
 
 /*
  * Instance methods
  */
 
-Channel::Channel    (FileTransfer* transfer, int socket, Address peer_addr) :
-	// Arno, 2011-10-03: Reordered to avoid g++ Wall warning
-	peer_(peer_addr), socket_(socket==INVALID_SOCKET?default_socket():socket), // FIXME
-    transfer_(transfer), peer_channel_id_(0), own_id_mentioned_(false),
+Channel::Channel(ContentTransfer* transfer, int socket, Address peer_addr,bool peerissource) :
+    // Arno, 2011-10-03: Reordered to avoid g++ Wall warning
+    peer_(peer_addr), socket_(socket==INVALID_SOCKET?default_socket():socket), // FIXME
+    transfer_(transfer), own_id_mentioned_(false),
     data_in_(TINT_NEVER,bin_t::NONE), data_in_dbl_(bin_t::NONE),
-    data_out_cap_(bin_t::ALL),hint_out_size_(0),
+    data_out_cap_(bin_t::ALL),hint_in_size_(0), hint_out_size_(0),
     // Gertjan fix 996e21e8abfc7d88db3f3f8158f2a2c4fc8a8d3f
     // "Changed PEX rate limiting to per channel limiting"
+    pex_requested_(false),  // Ric: init var that wasn't initialiazed
     last_pex_request_time_(0), next_pex_request_time_(0),
-    pex_request_outstanding_(false), pex_requested_(false),  // Ric: init var that wasn't initialiazed
+    pex_request_outstanding_(false),
     useless_pex_count_(0),
     rtt_avg_(TINT_SEC), dev_avg_(0), dip_avg_(TINT_SEC),
     last_send_time_(0), last_recv_time_(0), last_data_out_time_(0), last_data_in_time_(0),
@@ -64,18 +62,24 @@ Channel::Channel    (FileTransfer* transfer, int socket, Address peer_addr) :
     cwnd_count1_(0), send_interval_(TINT_SEC),
     send_control_(PING_PONG_CONTROL), sent_since_recv_(0),
     lastrecvwaskeepalive_(false), lastsendwaskeepalive_(false), // Arno: nap bug fix
+    live_have_no_hint_(false), // Arno: live speed opt
     ack_rcvd_recent_(0),
     ack_not_rcvd_recent_(0), owd_min_bin_(0), owd_min_bin_start_(NOW),
     owd_cur_bin_(0), dgrams_sent_(0), dgrams_rcvd_(0),
     raw_bytes_up_(0), raw_bytes_down_(0), bytes_up_(0), bytes_down_(0),
-    scheduled4close_(false),
-	direct_sending_(false)
+    scheduled4del_(false),
+    direct_sending_(false),
+    peer_is_source_(peerissource),
+    hs_out_(NULL), hs_in_(NULL),
+    rtt_hint_tintbin_(),
+    hint_queue_out_(NULL), hint_queue_out_size_(0)
 {
     if (peer_==Address())
         peer_ = tracker;
+  
     this->id_ = channels.size();
     channels.push_back(this);
-    transfer_->hs_in_.push_back(bin_t(id_));
+
     for(int i=0; i<4; i++) {
         owd_min_bins_[i] = TINT_NEVER;
         owd_current_[i] = TINT_NEVER;
@@ -84,132 +88,156 @@ Channel::Channel    (FileTransfer* transfer, int socket, Address peer_addr) :
     evtimer_assign(evsend_ptr_,evbase,&Channel::LibeventSendCallback,this);
     evtimer_add(evsend_ptr_,tint2tv(next_send_time_));
 
-    // RATELIMIT
-	transfer->mychannels_.push_back(this);
+    //LIVE
+    evsendlive_ptr_ = NULL;
 
-	dprintf("%s #%u init channel %s transfer %d\n",tintstr(),id_,peer_.str(), transfer_->fd() );
-	//fprintf(stderr,"new Channel %d %s\n", id_, peer_.str() );
+    // RATELIMIT
+    transfer_->GetChannels()->push_back(this);
+
+    hs_out_ = new Handshake();
+    if (transfer_->ttype() == FILE_TRANSFER)
+	hs_out_->cont_int_prot_ = POPT_CONT_INT_PROT_MERKLE;
+    else
+	hs_out_->cont_int_prot_ = POPT_CONT_INT_PROT_NONE; // PPSPTODO implement live schemes
+
+    dprintf("%s #%u init channel %s transfer %d\n",tintstr(),id_,peer_.str().c_str(), transfer_->td() );
+    //fprintf(stderr,"new Channel %d %s\n", id_, peer_.str().c_str() );
 }
 
 
 Channel::~Channel () {
-	dprintf("%s #%u dealloc channel\n",tintstr(),id_);
+    dprintf("%s #%u dealloc channel\n",tintstr(),id_);
     channels[id_] = NULL;
     ClearEvents();
 
     // RATELIMIT
     if (transfer_ != NULL)
     {
-		channels_t::iterator iter;
-		for (iter=transfer().mychannels_.begin(); iter!=transfer().mychannels_.end(); iter++)
-		{
-			if (*iter == this)
-				break;
-		}
-    	transfer_->mychannels_.erase(iter);
+        channels_t::iterator iter;
+        channels_t *channels = transfer_->GetChannels();
+        for (iter=channels->begin(); iter!=channels->end(); iter++)
+        {
+           if (*iter == this)
+               break;
+        }
+        channels->erase(iter);
     }
 
-    // SUBSCRIBE
-    if (FileTransfer::subscribe_channel_close)
-    {
-	CloseEvent ce(transfer().root_hash(),peer_,raw_bytes_down_,raw_bytes_up_,bytes_down_,bytes_up_);
-	FileTransfer::subscribe_event_q.push_back(ce);
-    }
+    if (hs_in_ != NULL)
+	delete hs_in_;
+    if (hs_out_ != NULL)
+	delete hs_out_;
 }
 
 
 void Channel::ClearEvents()
 {
-    if (evsend_ptr_ != NULL) {
-    	if (evtimer_pending(evsend_ptr_,NULL))
-    		evtimer_del(evsend_ptr_);
-    	delete evsend_ptr_;
-    	evsend_ptr_ = NULL;
+    // Arno, 2013-02-01: Be safer, _del not just on pending.
+    if (evsend_ptr_ != NULL) 
+    {
+        evtimer_del(evsend_ptr_);
+        delete evsend_ptr_;
+        evsend_ptr_ = NULL;
+    }
+    if (evsendlive_ptr_ != NULL)
+    {
+        evtimer_del(evsendlive_ptr_);
+        delete evsendlive_ptr_;
+        evsendlive_ptr_ = NULL;
     }
 }
 
-
-
+HashTree * Channel::hashtree()
+{
+    if (transfer()->ttype() == LIVE_TRANSFER)
+        return NULL;
+    else
+        return ((FileTransfer *)transfer_)->hashtree();
+}
 
 bool Channel::IsComplete() {
- 	// Check if peak hash bins are filled.
-	if (hashtree()->peak_count() == 0)
-		return false;
+
+    if (transfer()->ttype() == LIVE_TRANSFER)
+	return peer_is_source_;
+
+    // Check if peak hash bins are filled.
+    if (hashtree()->peak_count() == 0)
+        return false;
 
     for(int i=0; i<hashtree()->peak_count(); i++) {
         bin_t peak = hashtree()->peak(i);
         if (!ack_in_.is_filled(peak))
             return false;
     }
- 	return true;
+    return true;
 }
 
 
 
 uint16_t Channel::GetMyPort() {
-	struct sockaddr_in mysin = {};
-	socklen_t mysinlen = sizeof(mysin);
-	if (getsockname(socket_, (struct sockaddr *)&mysin, &mysinlen) < 0)
-	{
-		print_error("error on getsockname");
-		return 0;
-	}
-	else
-		return ntohs(mysin.sin_port);
+    Address addr;
+    // Arno, 2013-06-05: Retrieving addr, so use largest possible sockaddr
+    socklen_t addrlen = sizeof(struct sockaddr_storage);
+    if (getsockname(socket_, (struct sockaddr *)&addr.addr, &addrlen) < 0)
+    {
+        print_error("error on getsockname");
+        return 0;
+    }
+    else
+        return addr.port();
 }
 
 bool Channel::IsDiffSenderOrDuplicate(Address addr, uint32_t chid)
 {
     if (peer() != addr)
     {
-    	// Got message from different address than I send to
-    	//
-		if (!own_id_mentioned_ && addr.is_private()) {
-			// Arno, 2012-02-27: Got HANDSHAKE reply from IANA private address,
-			// check for duplicate connections:
-			//
-			// When two peers A and B are behind the same firewall, they will get
-			// extB, resp. extA addresses from the tracker. They will both
-			// connect to their counterpart but because the incoming packet
-			// will be from the intNAT address the duplicates are not
-			// recognized.
-			//
-			// Solution: when the second datagram comes in (HANDSHAKE reply),
-			// see if you have had a first datagram from the same addr
-			// (HANDSHAKE). If so, close the channel if his port number is
-			// larger than yours (such that one channel remains).
-			//
-			recv_peer_ = addr;
+        // Got message from different address than I send to
+        //
+        if (!own_id_mentioned_ && addr.is_private()) {
+            // Arno, 2012-02-27: Got HANDSHAKE reply from IANA private address,
+            // check for duplicate connections:
+            //
+            // When two peers A and B are behind the same firewall, they will get
+            // extB, resp. extA addresses from the tracker. They will both
+            // connect to their counterpart but because the incoming packet
+            // will be from the intNAT address the duplicates are not
+            // recognized.
+            //
+            // Solution: when the second datagram comes in (HANDSHAKE reply),
+            // see if you have had a first datagram from the same addr
+            // (HANDSHAKE). If so, close the channel if his port number is
+            // larger than yours (such that one channel remains).
+            //
+            recv_peer_ = addr;
 
-			Channel *c = transfer().FindChannel(addr,this);
-			if (c != NULL) {
-				// I already initiated a connection to this peer,
-				// this new incoming message would establish a duplicate.
-				// One must break the connection, decide using port
-				// number:
-				dprintf("%s #%u found duplicate channel to %s\n",
-						tintstr(),chid,addr.str());
+            Channel *c = transfer()->FindChannel(addr,this);
+            if (c == NULL)
+                return false;
+  
+            // I already initiated a connection to this peer,
+            // this new incoming message would establish a duplicate.
+            // One must break the connection, decide using port
+            // number:
+            dprintf("%s #%u found duplicate channel to %s\n",
+                    tintstr(),chid,addr.str().c_str());
 
-				if (addr.port() > GetMyPort()) {
-					//Schedule4Close();
-					dprintf("%s #%u closing duplicate channel to %s\n",
-							tintstr(),chid,addr.str());
-					return true;
-				}
-			}
-		}
-		else
-		{
-			// Received HANDSHAKE reply from other address than I sent
-			// HANDSHAKE to, and the address is not an IANA private
-			// address (=no NAT in play), so close.
-			//Schedule4Close();
-			dprintf("%s #%u invalid peer address %s!=%s\n",
-					tintstr(),chid,peer().str(),addr.str());
-			return true;
-		}
+            if (addr.port() > GetMyPort()) {
+                dprintf("%s #%u closing duplicate channel to %s\n",
+                    tintstr(),chid,addr.str().c_str());
+                return true;
+            }
+        }
+        else
+        {
+            // Received HANDSHAKE reply from other address than I sent
+            // HANDSHAKE to, and the address is not an IANA private
+            // address (=no NAT in play), so close.
+            dprintf("%s #%u invalid peer address %s!=%s\n",
+                    tintstr(),chid,peer().str().c_str(),addr.str().c_str());
+            return true;
+        }
     }
-	return false;
+    return false;
 }
 
 
@@ -230,12 +258,13 @@ tint Channel::Time () {
 
 // SOCKMGMT
 evutil_socket_t Channel::Bind (Address address, sckrwecb_t callbacks) {
-    struct sockaddr_in addr = address;
+    struct sockaddr_storage sa = address;
     evutil_socket_t fd;
-    int len = sizeof(struct sockaddr_in), sndbuf=1<<20, rcvbuf=1<<20;
+    // Arno, 2013-06-05: MacOS X bind fails if sizeof(struct sockaddr_storage) is passed.
+    int len = address.get_real_sockaddr_length(), sndbuf=1<<20, rcvbuf=1<<20;
     #define dbnd_ensure(x) { if (!(x)) { \
         print_error("binding fails"); close_socket(fd); return INVALID_SOCKET; } }
-    dbnd_ensure ( (fd = socket(AF_INET, SOCK_DGRAM, 0)) >= 0 );
+    dbnd_ensure ( (fd = socket(address.get_family(), SOCK_DGRAM, 0)) >= 0 );
     dbnd_ensure( make_socket_nonblocking(fd) );  // FIXME may remove this
     int enable = true;
     dbnd_ensure ( setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
@@ -243,7 +272,14 @@ evutil_socket_t Channel::Bind (Address address, sckrwecb_t callbacks) {
     dbnd_ensure ( setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
                              (setsockoptptr_t)&rcvbuf, sizeof(int)) == 0 );
     //setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (setsockoptptr_t)&enable, sizeof(int));
-    dbnd_ensure ( ::bind(fd, (sockaddr*)&addr, len) == 0 );
+    if (address.get_family() == AF_INET6)
+    {
+	// Arno, 2012-12-04: Enable IPv4 on this IPv6 socket, addresses
+	// show up as IPv4-mapped IPv6.
+	int no = 0;
+	dbnd_ensure ( setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (setsockoptptr_t)&no, sizeof(no)) == 0 );
+    }
+    dbnd_ensure ( ::bind(fd, (sockaddr*)&sa, len) == 0 );
 
     callbacks.sock = fd;
     sock_open[sock_count++] = callbacks;
@@ -252,46 +288,48 @@ evutil_socket_t Channel::Bind (Address address, sckrwecb_t callbacks) {
 
 Address Channel::BoundAddress(evutil_socket_t sock) {
 
-    struct sockaddr_in myaddr;
-    socklen_t mylen = sizeof(myaddr);
+    struct sockaddr_storage myaddr;
+    // Arno, 2013-06-05: Retrieving addr, so use largest possible sockaddr
+    socklen_t mylen = sizeof(struct sockaddr_storage);
     int ret = getsockname(sock,(sockaddr*)&myaddr,&mylen);
     if (ret >= 0) {
-		return Address(myaddr);
+        return Address(myaddr);
     }
-	else {
-		return Address();
-	}
+    else {
+        return Address();
+    }
 }
 
 
 Address swift::BoundAddress(evutil_socket_t sock) {
-	return Channel::BoundAddress(sock);
+    return Channel::BoundAddress(sock);
 }
 
 
 int Channel::SendTo (evutil_socket_t sock, const Address& addr, struct evbuffer *evb) {
 	Address destination = addr;
 
-	int lengthLoss = 0;
+	 int lengthLoss = 0;
 
-	// If we have a Socks5Connection use it to tunnel data through!
-	if(Channel::socks5_connection.isOpen()){
-		lengthLoss = Channel::socks5_connection.prependHeader(addr, evb);
-		destination = Channel::socks5_connection.getBindAddress();
-	} else if(Channel::socks5_connection.getBindAddress() != Address()){
-		printf("ERROR: Sending to %s:%d WITHOUT socks5\n", destination.ipv4str(), destination.port());
+	 // If we have a Socks5Connection use it to tunnel data through!
+	 if(Channel::socks5_connection.isOpen()){
+	   lengthLoss = Channel::socks5_connection.prependHeader(addr, evb);
+	   destination = Channel::socks5_connection.getBindAddress();
+	 } else if(Channel::socks5_connection.getBindAddress() != Address()){
+	   printf("ERROR: Sending to %s WITHOUT socks5\n", destination.ipstr(true).c_str());
 
-	}
+	 }
 
     int length = evbuffer_get_length(evb);
     int r = sendto(sock,(const char *)evbuffer_pullup(evb, length),length,0,
-                   (struct sockaddr*)&(destination.addr),sizeof(struct sockaddr_in));
+    		(struct sockaddr*)&(destination.addr),sizeof(struct sockaddr_in));
+    // SCHAAP: 2012-06-16 - How about EAGAIN and EWOULDBLOCK? Do we just drop the packet then as well?
     if (r<0) {
         print_error("can't send");
         evbuffer_drain(evb, length); // Arno: behaviour is to pretend the packet got lost
     }
     else
-    	evbuffer_drain(evb,r);
+        evbuffer_drain(evb,r);
     global_dgrams_up++;
     global_raw_bytes_up+=length - lengthLoss;
     Time();
@@ -299,15 +337,15 @@ int Channel::SendTo (evutil_socket_t sock, const Address& addr, struct evbuffer 
 }
 
 int Channel::RecvFrom (evutil_socket_t sock, Address& addr, struct evbuffer *evb) {
-    socklen_t addrlen = sizeof(struct sockaddr_in);
+    // Arno, 2013-06-05: Incoming addr, so use largest possible sockaddr
+    socklen_t addrlen = sizeof(struct sockaddr_storage);
     struct evbuffer_iovec vec;
     if (evbuffer_reserve_space(evb, SWIFT_MAX_RECV_DGRAM_SIZE, &vec, 1) < 0) {
-    	print_error("error on evbuffer_reserve_space");
-    	return 0;
+        print_error("error on evbuffer_reserve_space");
+        return 0;
     }
     int length = recvfrom (sock, (char *)vec.iov_base, SWIFT_MAX_RECV_DGRAM_SIZE, 0,
-			   (struct sockaddr*)&(addr.addr), &addrlen);
-
+               (struct sockaddr*)&(addr.addr), &addrlen);
     if (length<0) {
         length = 0;
 
@@ -318,11 +356,11 @@ int Channel::RecvFrom (evutil_socket_t sock, Address& addr, struct evbuffer *evb
 #ifdef _WIN32
         if (WSAGetLastError() == 10054) // Sometimes errno == 2 ?!
 #else
-	if (errno == ECONNREFUSED)
+        if (errno == ECONNREFUSED)
 #endif
-	{
+        {
             CloseChannelByAddress(addr);
-	}
+        }
         else
             print_error("error on recv");
     }
@@ -333,20 +371,22 @@ int Channel::RecvFrom (evutil_socket_t sock, Address& addr, struct evbuffer *evb
     }
     global_dgrams_down++;
 
-    // If there is a SOCKS5 connection set we need to unwrap the packet!
-    if(addr == Channel::socks5_connection.getBindAddress()){
-    	int result = Channel::socks5_connection.unwrapDatagram(addr, evb);
 
-    	if(result > -1){
-    		length -= result;
+        // If there is a SOCKS5 connection set we need to unwrap the packet!
+        if(addr == Channel::socks5_connection.getBindAddress()){
+          int result = Channel::socks5_connection.unwrapDatagram(addr, evb);
 
-//    		printf("Got %d byte packet from %s:%d via SOCKS5 proxy at %s:%d\n", length, addr.ipv4str(), addr.port(), socks5_connection.getBindAddress().ipv4str(), socks5_connection.getBindAddress().port());
-    	} else{
-    		printf("Got corrupted SOCKS5 packet from %s:%d\n", socks5_connection.getBindAddress().ipv4str(), socks5_connection.getBindAddress().port());
-    	}
-    } else if(Channel::socks5_connection.getBindAddress() != Address()){
-    	//fprintf(stderr, "Got %d bytes NON SOCKS5 from %s:%d\n", length, addr.ipv4str(), addr.port());
-    }
+          if(result > -1){
+            length -= result;
+
+    //        printf("Got %d byte packet from %s:%d via SOCKS5 proxy at %s:%d\n", length, addr.ipv4str(), addr.port(), socks5_connection.getBindAddress().ipv4str(), socks5_connection.getBindAddress().port());
+          } else{
+            printf("Got corrupted SOCKS5 packet from %s\n", socks5_connection.getBindAddress().ipstr(true).c_str());
+          }
+        } else if(Channel::socks5_connection.getBindAddress() != Address()){
+          //fprintf(stderr, "Got %d bytes NON SOCKS5 from %s:%d\n", length, addr.ipv4str(), addr.port());
+        }
+
 
 
     global_raw_bytes_down+=length;
@@ -383,51 +423,10 @@ int Channel::EncodeID(int unscrambled) {
     return unscrambled ^ (int)start;
 }
 
-/*
- * class Address implementation
- */
-
-void Address::set_ipv4 (const char* ip_str) {
-    struct hostent *h = gethostbyname(ip_str);
-    if (h == NULL) {
-        print_error("cannot lookup address");
-        return;
-    } else {
-        addr.sin_addr.s_addr = *(u_long *) h->h_addr_list[0];
-    }
-}
-
-
-Address::Address(const char* ip_port) {
-    clear();
-    if (strlen(ip_port)>=1024)
-        return;
-    char ipp[1024];
-    strncpy(ipp,ip_port,1024);
-    char* semi = strchr(ipp,':');
-    if (semi) {
-        *semi = 0;
-        set_ipv4(ipp);
-        set_port(semi+1);
-    } else {
-        if (strchr(ipp, '.')) {
-            set_ipv4(ipp);
-            set_port((uint16_t)0);
-        } else {
-            set_ipv4((uint32_t)INADDR_ANY);
-            set_port(ipp);
-        }
-    }
-}
-
-
-uint32_t Address::LOCALHOST = INADDR_LOOPBACK;
-
 
 /*
- * Utility methods 1
+ * Utility methods
  */
-
 
 const char* swift::tintstr (tint time) {
     if (time==0)
@@ -452,200 +451,6 @@ const char* swift::tintstr (tint time) {
     return ret_str[i];
 }
 
-
-std::string swift::sock2str (struct sockaddr_in addr) {
-    char ipch[32];
-#ifdef _WIN32
-    //Vista only: InetNtop(AF_INET,&(addr.sin_addr),ipch,32);
-    // IPv4 only:
-    struct in_addr inaddr;
-    memcpy(&inaddr, &(addr.sin_addr), sizeof(inaddr));
-    strncpy(ipch, inet_ntoa(inaddr),32);
-#else
-    inet_ntop(AF_INET,&(addr.sin_addr),ipch,32);
-#endif
-    sprintf(ipch+strlen(ipch),":%i",ntohs(addr.sin_port));
-    return std::string(ipch);
-}
-
-
-/*
- * Swift top-level API implementation
- */
-
-int     swift::Listen (Address addr) {
-    sckrwecb_t cb;
-    cb.may_read = &Channel::LibeventReceiveCallback;
-    cb.sock = Channel::Bind(addr,cb);
-    // swift UDP receive
-    event_assign(&Channel::evrecv, Channel::evbase, cb.sock, EV_READ,
-		 cb.may_read, NULL);
-    event_add(&Channel::evrecv, NULL);
-    return cb.sock;
-}
-
-void    swift::Shutdown (int sock_des) {
-    Channel::Shutdown();
-}
-
-int      swift::Open (std::string filename, const Sha1Hash& roothash, std::string metadir, Address tracker, bool force_check_diskvshash, bool check_netwvshash, uint32_t chunk_size) {
-    FileTransfer* ft = new FileTransfer(filename, roothash, metadir, force_check_diskvshash, check_netwvshash, chunk_size);
-    if (ft->fd() && ft->IsOperational()) {
-
-        // initiate tracker connections
-    	// SWIFTPROC
-    	ft->SetTracker(tracker);
-    	ft->ConnectToTracker();
-
-    	return ft->fd();
-    } else {
-		delete ft;
-        return -1;
-    }
-}
-
-
-void    swift::Close (int fd) {
-    if (fd<FileTransfer::files.size() && FileTransfer::files[fd])
-        delete FileTransfer::files[fd];
-}
-
-
-void    swift::AddPeer (Address address, const Sha1Hash& root) {
-    //Channel::peer_selector->AddPeer(address,root);
-}
-
-
-ssize_t  swift::Read(int fdes, void *buf, size_t nbyte, int64_t offset)
-{
-    if (FileTransfer::files.size()>fdes && FileTransfer::files[fdes])
-        return FileTransfer::files[fdes]->GetStorage()->Read(buf,nbyte,offset);
-    else
-        return -1;
-}
-
-ssize_t  swift::Write(int fdes, const void *buf, size_t nbyte, int64_t offset)
-{
-    if (FileTransfer::files.size()>fdes && FileTransfer::files[fdes])
-        return FileTransfer::files[fdes]->GetStorage()->Write(buf,nbyte,offset);
-    else
-        return -1;
-}
-
-
-uint64_t  swift::Size (int fdes) {
-    if (FileTransfer::files.size()>fdes && FileTransfer::files[fdes])
-        return FileTransfer::files[fdes]->hashtree()->size();
-    else
-        return 0;
-}
-
-
-bool  swift::IsComplete (int fdes) {
-    if (FileTransfer::files.size()>fdes && FileTransfer::files[fdes])
-        return FileTransfer::files[fdes]->hashtree()->is_complete();
-    else
-        return 0;
-}
-
-
-uint64_t  swift::Complete (int fdes) {
-    if (FileTransfer::files.size()>fdes && FileTransfer::files[fdes])
-        return FileTransfer::files[fdes]->hashtree()->complete();
-    else
-        return 0;
-}
-
-
-uint64_t  swift::SeqComplete (int fdes, int64_t offset) {
-    if (FileTransfer::files.size()>fdes && FileTransfer::files[fdes])
-        return FileTransfer::files[fdes]->hashtree()->seq_complete(offset);
-    else
-        return 0;
-}
-
-
-const Sha1Hash& swift::RootMerkleHash (int file) {
-    FileTransfer* trans = FileTransfer::file(file);
-    if (!trans)
-        return Sha1Hash::ZERO;
-    return trans->hashtree()->root_hash();
-}
-
-
-/** Returns the number of bytes in a chunk for this transmission */
-uint32_t	  swift::ChunkSize(int fdes)
-{
-    if (FileTransfer::files.size()>fdes && FileTransfer::files[fdes])
-        return FileTransfer::files[fdes]->hashtree()->chunk_size();
-    else
-        return 0;
-}
-
-
-// CHECKPOINT
-int swift::Checkpoint(int transfer) {
-	// Save transfer's binmap for zero-hashcheck restart
-	FileTransfer *ft = FileTransfer::file(transfer);
-	if (ft == NULL)
-            return -1;
-	if (ft->IsZeroState())
-	    return -1;
-
-    MmapHashTree *ht = (MmapHashTree *)ft->hashtree();
-    if (ht == NULL)
-    {
-         fprintf(stderr,"swift: checkpointing: ht is NULL\n");
-	     return -1;
-    }
-
-	std::string binmap_filename = ft->hashtree()->get_binmap_filename();
-	//fprintf(stderr,"swift: HACK checkpointing %s at %lli\n", binmap_filename.c_str(), Complete(transfer));
-	FILE *fp = fopen_utf8(binmap_filename.c_str(),"wb");
-	if (!fp) {
-        print_error("cannot open mbinmap for writing");
-        return -1;
-	}
-
-	int ret = ht->serialize(fp);
-  	if (ret < 0)
-        print_error("writing to mbinmap");
-	fclose(fp);
-	return ret;
-}
-
-
-// SEEK
-int swift::Seek(int fd, int64_t offset, int whence)
-{
-	dprintf("%s F%i Seek: to %lld\n",tintstr(), fd, offset );
-
-	FileTransfer *ft = FileTransfer::file(fd);
-	if (ft == NULL)
-		return -1;
-
-	if (whence == SEEK_SET)
-	{
-		if (offset >= swift::Size(fd))
-			return -1; // seek beyond end of content
-
-		// Which bin to seek to?
-		int64_t coff = offset - (offset % ft->hashtree()->chunk_size()); // ceil to chunk
-		bin_t offbin = bin_t(0,coff/ft->hashtree()->chunk_size());
-
-		char binstr[32];
-		dprintf("%s F%i Seek: to bin %s\n",tintstr(), fd, offbin.str(binstr) );
-
-		return ft->picker().Seek(offbin,whence);
-	}
-	else
-		return -1; // TODO
-}
-
-
-/*
- * Utility methods 2
- */
 
 int swift::evbuffer_add_string(struct evbuffer *evb, std::string str) {
     return evbuffer_add(evb, str.c_str(), str.size());
@@ -675,6 +480,42 @@ int swift::evbuffer_add_64be(struct evbuffer *evb, uint64_t l) {
 int swift::evbuffer_add_hash(struct evbuffer *evb, const Sha1Hash& hash)  {
     return evbuffer_add(evb, hash.bits, Sha1Hash::SIZE);
 }
+
+// PPSP
+int swift::evbuffer_add_chunkaddr(struct evbuffer *evb, bin_t &b, popt_chunk_addr_t chunk_addr)
+{
+    int ret = -1;
+    if (chunk_addr == POPT_CHUNK_ADDR_BIN32)
+	ret = evbuffer_add_32be(evb, bin_toUInt32(b));
+    else if (chunk_addr == POPT_CHUNK_ADDR_CHUNK32)
+    {
+	ret = evbuffer_add_32be(evb, (uint32_t)b.base_offset() );
+	ret = evbuffer_add_32be(evb, (uint32_t)(b.base_offset()+b.base_length()-1) ); // end is inclusive
+    }
+    return ret;
+}
+
+int swift::evbuffer_add_pexaddr(struct evbuffer *evb, Address& a)
+{
+    int ret = -1;
+    if (a.get_family() == AF_INET)
+    {
+	ret = evbuffer_add_8(evb, SWIFT_PEX_RESv4);
+	ret = evbuffer_add_32be(evb, a.ipv4());
+	ret = evbuffer_add_16be(evb, a.port());
+    }
+    else
+    {
+	struct in6_addr ipv6 = a.ipv6();
+
+	ret = evbuffer_add_8(evb, SWIFT_PEX_RESv6);
+	for (int i=0; i<16; i++)
+	    ret = evbuffer_add_8(evb, ipv6.s6_addr[i] );
+	ret = evbuffer_add_16be(evb, a.port());
+    }
+    return ret;
+}
+
 
 uint8_t swift::evbuffer_remove_8(struct evbuffer *evb) {
     uint8_t b;
@@ -714,3 +555,124 @@ Sha1Hash swift::evbuffer_remove_hash(struct evbuffer* evb)  {
     return Sha1Hash(false, bits);
 }
 
+// PPSP
+binvector swift::evbuffer_remove_chunkaddr(struct evbuffer *evb, popt_chunk_addr_t chunk_addr)
+{
+    binvector bv;
+    if (chunk_addr == POPT_CHUNK_ADDR_BIN32)
+    {
+	bin_t pos = bin_fromUInt32(evbuffer_remove_32be(evb));
+	bv.push_back(pos);
+    }
+    else if (chunk_addr == POPT_CHUNK_ADDR_CHUNK32)
+    {
+	uint32_t schunk = evbuffer_remove_32be(evb);
+	uint32_t echunk = evbuffer_remove_32be(evb);
+	if (schunk <= echunk) // Bad input protection
+	    swift::chunk32_to_bin32(schunk,echunk,&bv);
+    }
+    return bv;
+}
+
+Address swift::evbuffer_remove_pexaddr(struct evbuffer *evb, int family)
+{
+    int ret = -1;
+    if (family == AF_INET)
+    {
+	uint32_t ipv4 = evbuffer_remove_32be(evb);
+	uint16_t port = evbuffer_remove_16be(evb);
+	Address addr(ipv4,port);
+	return addr;
+    }
+    else
+    {
+	struct in6_addr ipv6;
+	for (int i=0; i<16; i++)
+	    ipv6.s6_addr[i] = evbuffer_remove_8(evb);
+	uint16_t port = evbuffer_remove_16be(evb);
+	Address addr(ipv6,port);
+	return addr;
+    }
+}
+
+
+
+/** Convert a chunk32 chunk specification to a list of bins. A chunk32 spec is
+ * a (start chunk ID, end chunk ID) pair, where chunk ID is just a numbering
+ * from 0 to N of all chunks, equivalent to the leaves in a bin tree. This
+ * method finds which bins describe this range.
+ */
+void swift::chunk32_to_bin32(uint32_t schunk, uint32_t echunk, binvector *bvptr)
+{
+    bin_t s(0,schunk);
+    bin_t e(0,echunk);
+
+    bin_t cur = s;
+    while (true)
+    {
+	// Move up in tree till we exceed either start or end. If so, the
+	// previous node belongs to the range description. Next, we start at
+	// the left most chunk in the subtree next to the previous node, and see
+	// how far up we can go there.
+	//fprintf(stderr,"\ncur %s par left %s par right %s\n", cur.str().c_str(), cur.parent().base_left().str().c_str(), cur.parent().base_right().str().c_str());
+	if (cur.parent().base_left() < s || cur.parent().base_right() > e)
+	{
+	    /*if (cur.parent().base_left() < s)
+		fprintf(stderr,"parent %s left %s before s, add %s\n", cur.parent().str().c_str(), cur.parent().base_left().str().c_str(), cur.str().c_str() );
+	    if (cur.parent().base_right() > e)
+		fprintf(stderr,"parent %s right %s exceeds e, add %s\n", cur.parent().str().c_str(), cur.parent().base_right().str().c_str(), cur.str().c_str() );
+	     */
+	    bvptr->push_back(cur);
+
+	    if (cur.parent().base_left() < s)
+		cur = bin_t(0,cur.parent().base_right().layer_offset()+1);
+	    else
+		cur = bin_t(0,cur.base_right().layer_offset()+1);
+
+	    //fprintf(stderr,"newcur %s\n", cur.str().c_str() );
+
+	    if (cur >= e)
+	    {
+		if (cur == e)
+		{
+		    // fprintf(stderr,"adding e %s\n", cur.str().c_str() );
+		    bvptr->push_back(e);
+		}
+		break;
+	    }
+	}
+	else
+	    cur = cur.parent();
+    }
+}
+
+
+/*
+ * Calculate the complement of 2 bins, where origbin covers cancelbin.
+ * I.e., origbin is turned into a list of base bins that are covered by
+ * origbin but not by cancelbin.
+ */
+binvector swift::bin_fragment(bin_t &origbin, bin_t &cancelbin)
+{
+    // origbin covers cancelbin
+    // Easy: just split into base bins
+    binvector bv;
+    bin_t origsbase = origbin.base_left();
+    bin_t origebase = origbin.base_right();
+    bin_t cansbase = cancelbin.base_left();
+    bin_t canebase = cancelbin.base_right();
+    bin_t curbin = origsbase;
+    while (curbin < cansbase)
+    {
+	bv.push_back(curbin);
+	curbin = bin_t(0,curbin.base_offset()+1);
+    }
+    curbin = bin_t(0,canebase.base_offset()+1);
+    while (curbin <= origebase)
+    {
+	bv.push_back(curbin);
+	curbin = bin_t(0,curbin.base_offset()+1);
+    }
+
+    return bv;
+}

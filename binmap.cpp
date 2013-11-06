@@ -1,3 +1,5 @@
+// Arno, 2013-06-11: Must come first to ensure SIZE_MAX etc are defined
+#include "compat.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdlib>
@@ -8,6 +10,22 @@
 
 
 #include "binmap.h"
+#include "bin_utils.h"
+
+// Ric hach to print binmap 
+// use it with:
+//   bitmap_t tmp = sbitmap;
+//   fprintf(stderr,"bbbbitmap: "BYTETOBINARYPATTERN" "BYTETOBINARYPATTERN" "BYTETOBINARYPATTERN" "BYTETOBINARYPATTERN" \n", BYTETOBINARY(tmp>>24), BYTETOBINARY(tmp>>16), BYTETOBINARY(tmp>>8), BYTETOBINARY(tmp));
+#define BYTETOBINARYPATTERN "%d%d%d%d%d%d%d%d"
+#define BYTETOBINARY(byte)  \
+  (byte & 0x80 ? 1 : 0), \
+  (byte & 0x40 ? 1 : 0), \
+  (byte & 0x20 ? 1 : 0), \
+  (byte & 0x10 ? 1 : 0), \
+  (byte & 0x08 ? 1 : 0), \
+  (byte & 0x04 ? 1 : 0), \
+  (byte & 0x02 ? 1 : 0), \
+  (byte & 0x01 ? 1 : 0)
 
 using namespace swift;
 
@@ -762,51 +780,77 @@ bin_t binmap_t::find_filled() const
 
 /**
  * Arno: Find first empty bin right of start (start inclusive)
+ * assumes start_bin is base bin
+ *
+ * BUG: Current binmap_t constructor creates a tree with a minimum height of
+ * 6. If the user assumes binmap_t dynamically determines the height of the
+ * three and it is smaller than 6, this method may return values out of the
+ * user's expected range. At this point I don't want to touch the minimum height
+ * to avoid breaking something.
  */
-bin_t binmap_t::find_empty(bin_t start) const
+bin_t binmap_t::find_empty(bin_t start_bin) const
 {
-	bin_t cur_bin = start;
+    if (is_empty(start_bin))
+	return start_bin;
 
-	if (is_empty(cur_bin))
-		return cur_bin;
-	do
+    // Arno, 2012-11-07:
+    // The code below mistakenly assumes the left part of the tree is filled.
+    // A simple solution is to just create a copy of the binmap that indeed
+    // has that property :-(
+
+    // Create copy and fill till start_bin
+    binmap_t hackmap;
+    binmap_t::copy(hackmap,*this);
+    uint64_t sizec = start_bin.base_right().layer_offset(); // do not set start_bin itself
+
+    bin_t peaks[64];
+    int peak_count = gen_peaks(sizec,peaks);
+    for (int i=0; i<peak_count; i++)
+	hackmap.set(peaks[i]);
+
+    // Original code to look for hole starting with start_bin
+    bin_t cur_bin = start_bin;
+    do
+    {
+	// Move up till we find ancestor that is not filled.
+	cur_bin = cur_bin.parent();
+	if (!hackmap.is_filled(cur_bin))
 	{
-		// Move up till we find ancestor that is not filled.
-		cur_bin = cur_bin.parent();
-		if (!is_filled(cur_bin))
-		{
-			// Ancestor is not filled
-			break;
-		}
-		if (cur_bin == root_bin_)
-		{
-			// Hit top, full tree, sort of. For some reason root_bin_ not
-			// set to real top (but to ALL), so we may actually return a
-			// bin that is outside the size of the content here.
-			return bin_t::NONE;
-		}
+	    // Ancestor is not filled
+	    break;
 	}
-	while (true);
-
-	// Move down
-	do
+	if (cur_bin == hackmap.root_bin_)
 	{
-		if (!is_filled(cur_bin.left()))
-		{
-			cur_bin.to_left();
-		}
-		else if (!is_filled(cur_bin.right()))
-		{
-			cur_bin.to_right();
-		}
-		if (cur_bin.is_base())
-		{
-			// Found empty bin
-			return cur_bin;
-		}
-	} while(!cur_bin.is_base()); // safety catch
+	    // Hit top, full tree, sort of. For some reason root_bin_ not
+	    // set to real top (but to ALL), so we may actually return a
+	    // bin that is outside the size of the content here.
+	    //
+	    // MAY NOT work for trees with height < 6 as that is the default
+	    // minimum height.
+	    return bin_t::NONE;
+	}
+    }
+    while (true);
 
-	return bin_t::NONE;
+    // Move down
+    do
+    {
+	if (!hackmap.is_filled(cur_bin.left()))
+	{
+		cur_bin.to_left();
+	}
+	else if (!hackmap.is_filled(cur_bin.right()))
+	{
+		cur_bin.to_right();
+	}
+	if (cur_bin.is_base())
+	{
+		// Found empty bin
+		return cur_bin;
+	}
+    } while(!cur_bin.is_base()); // safety catch
+
+    return bin_t::NONE;
 }
 
 
@@ -907,6 +951,8 @@ bin_t binmap_t::find_complement(const binmap_t& destination, const binmap_t& sou
 {
     return find_complement(destination, source, bin_t::ALL, twist);
 
+    // Arno, 2012-01-09: Code unused?
+
     if (destination.is_empty()) {
         const cell_t& cell = source.cell_[ROOT_REF];
         if (!cell.is_left_ref_ && !cell.is_right_ref_ && cell.left_.bitmap_ == BITMAP_FILLED && cell.right_.bitmap_ == BITMAP_FILLED) {
@@ -1003,6 +1049,255 @@ bin_t binmap_t::find_complement(const binmap_t& destination, const binmap_t& sou
 
         return bin_t::NONE;
     }
+}
+
+
+bin_t binmap_t::find_match(const binmap_t& destination, const binmap_t& source, bin_t range, const bin_t::uint_t twist)
+{
+
+    ref_t sref = ROOT_REF;
+    bitmap_t sbitmap = BITMAP_EMPTY;
+    bool is_sref = true;
+
+    ref_t dref = ROOT_REF;
+    bitmap_t dbitmap = BITMAP_EMPTY;
+    bool is_dref = true;
+
+    //fprintf(stderr,"dest root %s, source root %s, twist %d, range %s\n", destination.root_bin_.str().c_str(), source.root_bin_.str().c_str(), twist, range.str().c_str());
+
+    if (range.contains(source.root_bin_)) {
+
+        range = source.root_bin_;
+        is_sref = true;
+        sref = ROOT_REF;
+
+    } else if (source.root_bin_.contains(range)) {
+
+        bin_t sbin;
+        source.trace(&sref, &sbin, range);
+
+        if (range == sbin) {
+            is_sref = true;
+
+        } else {
+            is_sref = false;
+
+            //fprintf(stderr, "ref: %s\n", sbin.str().c_str());
+
+            if (range < sbin) {
+                sbitmap = source.cell_[sref].left_.bitmap_;
+            } else {
+                sbitmap = source.cell_[sref].right_.bitmap_;
+            }
+
+            sbitmap &= BITMAP[ BITMAP_LAYER_BITS & range.toUInt() ];
+
+            bitmap_t tmp = sbitmap;
+            //fprintf(stderr,"bbbbitmap: "BYTETOBINARYPATTERN" "BYTETOBINARYPATTERN" "BYTETOBINARYPATTERN" "BYTETOBINARYPATTERN" \n", BYTETOBINARY(tmp>>24), BYTETOBINARY(tmp>>16), BYTETOBINARY(tmp>>8), BYTETOBINARY(tmp));
+
+            if (sbitmap == BITMAP_EMPTY) {
+                //fprintf(stderr, "???\n");
+                return bin_t::NONE;
+            }
+        }
+
+    } else {
+        return bin_t::NONE;
+    }
+
+    assert (is_sref || sbitmap != BITMAP_EMPTY);
+
+    if (destination.root_bin_.contains(range)) {
+
+    	//printf("Dest contains range: %s\n", range.str().c_str());
+
+        ref_t dref;
+        bin_t dbin;
+        destination.trace(&dref, &dbin, range);
+
+        if (range == dbin) {
+
+        	//printf("Dest range in the head bin\n");
+
+        	// check if the dest range is filled
+            const cell_t& dcell = destination.cell_[dref];
+            if (!dcell.is_left_ref_ && !dcell.is_right_ref_ && dcell.left_.bitmap_ == BITMAP_FILLED && dcell.right_.bitmap_ == BITMAP_FILLED) {
+                if (is_sref) {
+                    const cell_t& scell = source.cell_[sref];
+                    if (!scell.is_left_ref_ && !scell.is_right_ref_ && scell.left_.bitmap_ == BITMAP_FILLED && scell.right_.bitmap_ == BITMAP_FILLED) {
+                        return range;
+                    } else {
+                        return _find_complement(range, BITMAP_EMPTY, sref, source, twist);
+                    }
+                } else {
+                    return _find_complement(range, BITMAP_EMPTY, sbitmap, twist);
+                }
+            }
+
+            if (is_sref) {
+
+                //printf("is ref\n");
+
+                return _find_complement(range, dref, destination, sref, source, twist, true);
+            } else {
+
+                //fprintf(stderr,"is NOT ref: TODO\n");
+
+                return _find_complement(range, dref, destination, sbitmap, twist, true);
+            }
+
+        } else {
+            bitmap_t dbitmap;
+
+            if (range < dbin) {
+                dbitmap = destination.cell_[dref].left_.bitmap_;
+
+            } else {
+                dbitmap = destination.cell_[dref].right_.bitmap_;
+            }
+
+			if (dbitmap == BITMAP_EMPTY) {
+                return bin_t::NONE;
+
+            } else if (is_sref) {
+
+            	if (dbitmap == BITMAP_FILLED) {
+                    const cell_t& cell = source.cell_[sref];
+                    if (!cell.is_left_ref_ && !cell.is_right_ref_ && cell.left_.bitmap_ == BITMAP_FILLED && cell.right_.bitmap_ == BITMAP_FILLED) {
+                        return range;
+                    }
+                }
+            	return _find_complement(range, dbitmap, sref, source, twist, true);
+
+            } else {
+                if ((sbitmap & dbitmap) != BITMAP_EMPTY) {
+                    return _find_complement(range, dbitmap, sbitmap, twist, true);
+                } else {
+                    return bin_t::NONE;
+                }
+            }
+        }
+
+    } else { // range.contains(destination.m_root_bin)
+
+
+        if (range.contains(destination.root_bin_)) {
+
+            return find_match(destination, source, destination.root_bin_, twist);
+
+        } else {
+            return bin_t::NONE;
+        }
+    }
+    /*
+        if (is_sref) {
+            SSTACK();
+
+            SPUSH(range, sref, twist);
+
+            do {
+                SPOP();
+
+                fprintf(stderr,"..do.. %d\n", is_left);
+
+                if (is_left) {
+                    if (b.left() == destination.root_bin_) {
+
+                        fprintf(stderr,"found dest root bin\n");
+
+                        if (sc.is_left_ref_) {
+
+                            fprintf(stderr,"TODO 1\n");
+
+                            const bin_t res = binmap_t::_find_complement(destination.root_bin_, ROOT_REF, destination, sc.left_.ref_, source, twist, true);
+                            if (!res.is_none()) {
+                                return res;
+                            }
+                        } else if (sc.left_.bitmap_ != BITMAP_EMPTY) {
+
+                            fprintf(stderr,"TODO 2\n");
+
+                            const bin_t res = binmap_t::_find_complement(destination.root_bin_, ROOT_REF, destination, sc.left_.bitmap_, twist, true);
+                            if (!res.is_none()) {
+                                return res;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Only a ref, look for the bin of interest (dest.root)
+                    if (sc.is_left_ref_) {
+                        SPUSH(b.left(), sc.left_.ref_, twist);
+                        continue;
+
+                    } else if (sc.left_.bitmap_ != BITMAP_EMPTY) { // there is a binmap there
+                        if (0 == (twist & (b.left().base_length() - 1) & ~(destination.root_bin_.base_length() - 1))) {
+
+                            // enters here with twist == 0
+
+                            fprintf(stderr,"TODO 3, b: %s\n", b.str().c_str());
+
+                            // should reverse the sbitmap?
+                            const bin_t res = binmap_t::_find_complement(destination.root_bin_, ROOT_REF, destination, sc.left_.bitmap_, twist, true);
+                            if (!res.is_none()) {
+                                return res;
+                            }
+                            //return binmap_t::_find_complement(destination.root_bin_.sibling(), BITMAP_EMPTY, sc.left_.bitmap_, twist);
+                            return res;
+
+                        } else if (sc.left_.bitmap_ != BITMAP_FILLED) {
+
+                            fprintf(stderr,"TODO 4");
+
+                            // should reverse the sbitmap?
+                            return binmap_t::_find_complement(b.left(), BITMAP_EMPTY, sc.left_.bitmap_, twist);
+
+                        } else { // sbitmap filled
+                            bin_t::uint_t s = twist & (b.left().base_length() - 1);
+                            // Sorry for the following hardcode hack: Flow the highest bit of s
+                            s |= s >> 1; s |= s >> 2;
+                            s |= s >> 4; s |= s >> 8;
+                            s |= s >> 16;
+                            s |= (s >> 16) >> 16;   // FIXME: hide warning
+                            return bin_t(s + 1 + (s >> 1)); // bin_t(s >> 1).sibling();
+                        }
+                    }
+
+                } else {
+                    if (sc.is_right_ref_) {
+                        return binmap_t::_find_complement(b.right(), BITMAP_EMPTY, sc.right_.ref_, source, twist, true);
+                    } else if (sc.right_.bitmap_ != BITMAP_EMPTY) {
+                        return binmap_t::_find_complement(b.right(), BITMAP_EMPTY, sc.right_.bitmap_, twist, true);
+                    }
+                    continue;
+                }
+            } while (_top_ > 0);
+
+            return bin_t::NONE;
+
+        } else {
+            if (0 == (twist & (range.base_length() - 1) & ~(destination.root_bin_.base_length() - 1))) {
+                const bin_t res = binmap_t::_find_complement(destination.root_bin_, ROOT_REF, destination, sbitmap, twist, true);
+                if (!res.is_none()) {
+                    return res;
+                }
+                //return binmap_t::_find_complement(destination.root_bin_.sibling(), BITMAP_EMPTY, sbitmap, twist, true);
+                return res;
+
+            } else if (sbitmap != BITMAP_FILLED) {
+                return binmap_t::_find_complement(range, BITMAP_EMPTY, sbitmap, twist, true);
+
+            } else {
+                bin_t::uint_t s = twist & (range.base_length() - 1);
+                // Sorry for the following hardcode hack: Flow the highest bit of s /
+                s |= s >> 1; s |= s >> 2;
+                s |= s >> 4; s |= s >> 8;
+                s |= s >> 16;
+                s |= (s >> 16) >> 16;   // FIXME: hide warning
+                return bin_t(s + 1 + (s >> 1)); // bin_t(s >> 1).sibling();
+            }
+        }
+    }*/
 }
 
 
@@ -1196,8 +1491,13 @@ bin_t binmap_t::find_complement(const binmap_t& destination, const binmap_t& sou
 }
 
 
-bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binmap_t& destination, const ref_t sref, const binmap_t& source, const bin_t::uint_t twist)
+
+bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binmap_t& destination, const ref_t sref, const binmap_t& source, const bin_t::uint_t twist, bool match)
 {
+    /* check weather we are looking for a match */
+    bitmap_t bitmap_filled = match ? BITMAP_EMPTY : BITMAP_FILLED;
+    bitmap_t bitmap_empty = match ? BITMAP_FILLED : BITMAP_EMPTY;
+
     /* Initialization */
     SDSTACK();
     SDPUSH(bin, sref, dref, twist);
@@ -1212,8 +1512,8 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binma
                     SDPUSH(b.left(), sc.left_.ref_, dc.left_.ref_, twist);
                     continue;
 
-                } else if (dc.left_.bitmap_ != BITMAP_FILLED) {
-                    const bin_t res = binmap_t::_find_complement(b.left(), dc.left_.bitmap_, sc.left_.ref_, source, twist);
+                } else if (dc.left_.bitmap_ != bitmap_filled) {
+                    const bin_t res = binmap_t::_find_complement(b.left(), dc.left_.bitmap_, sc.left_.ref_, source, twist, match);
                     if (!res.is_none()) {
                         return res;
                     }
@@ -1222,14 +1522,14 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binma
 
             } else if (sc.left_.bitmap_ != BITMAP_EMPTY) {
                 if (dc.is_left_ref_) {
-                    const bin_t res = binmap_t::_find_complement(b.left(), dc.left_.ref_, destination, sc.left_.bitmap_, twist);
+                    const bin_t res = binmap_t::_find_complement(b.left(), dc.left_.ref_, destination, sc.left_.bitmap_, twist, match);
                     if (!res.is_none()) {
                         return res;
                     }
                     continue;
 
-                } else if ((sc.left_.bitmap_ & ~dc.left_.bitmap_) != BITMAP_EMPTY) {
-                    return binmap_t::_find_complement(b.left(), dc.left_.bitmap_, sc.left_.bitmap_, twist);
+                } else if ((sc.left_.bitmap_ & (match ? dc.left_.bitmap_ : ~dc.left_.bitmap_) ) != BITMAP_EMPTY) {
+                    return binmap_t::_find_complement(b.left(), dc.left_.bitmap_, sc.left_.bitmap_, twist, match);
                 }
             }
 
@@ -1239,8 +1539,8 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binma
                     SDPUSH(b.right(), sc.right_.ref_, dc.right_.ref_, twist);
                     continue;
 
-                } else if (dc.right_.bitmap_ != BITMAP_FILLED) {
-                    const bin_t res = binmap_t::_find_complement(b.right(), dc.right_.bitmap_, sc.right_.ref_, source, twist);
+                } else if (dc.right_.bitmap_ != bitmap_filled) {
+                    const bin_t res = binmap_t::_find_complement(b.right(), dc.right_.bitmap_, sc.right_.ref_, source, twist, match);
                     if (!res.is_none()) {
                         return res;
                     }
@@ -1249,14 +1549,14 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binma
 
             } else if (sc.right_.bitmap_ != BITMAP_EMPTY) {
                 if (dc.is_right_ref_) {
-                    const bin_t res = binmap_t::_find_complement(b.right(), dc.right_.ref_, destination, sc.right_.bitmap_, twist);
+                    const bin_t res = binmap_t::_find_complement(b.right(), dc.right_.ref_, destination, sc.right_.bitmap_, twist, match);
                     if (!res.is_none()) {
                         return res;
                     }
                     continue;
 
-                } else if ((sc.right_.bitmap_ & ~dc.right_.bitmap_) != BITMAP_EMPTY) {
-                    return binmap_t::_find_complement(b.right(), dc.right_.bitmap_, sc.right_.bitmap_, twist);
+                } else if ((sc.right_.bitmap_ & (match ? dc.right_.bitmap_ : ~dc.right_.bitmap_)) != BITMAP_EMPTY) {
+                    return binmap_t::_find_complement(b.right(), dc.right_.bitmap_, sc.right_.bitmap_, twist, match);
                 }
             }
         }
@@ -1265,9 +1565,9 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binma
     return bin_t::NONE;
 }
 
-
-bin_t binmap_t::_find_complement(const bin_t& bin, const bitmap_t dbitmap, const ref_t sref, const binmap_t& source, const bin_t::uint_t twist)
+bin_t binmap_t::_find_complement(const bin_t& bin, const bitmap_t dbitmap, const ref_t sref, const binmap_t& source, const bin_t::uint_t twist, bool match)
 {
+
     assert (dbitmap != BITMAP_EMPTY || sref != ROOT_REF ||
             source.cell_[ROOT_REF].is_left_ref_ ||
             source.cell_[ROOT_REF].is_right_ref_ ||
@@ -1286,16 +1586,16 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const bitmap_t dbitmap, const
             if (sc.is_left_ref_) {
                 SPUSH(b.left(), sc.left_.ref_, twist);
                 continue;
-            } else if ((sc.left_.bitmap_ & ~dbitmap) != BITMAP_EMPTY) {
-                return binmap_t::_find_complement(b.left(), dbitmap, sc.left_.bitmap_, twist);
+            } else if ((sc.left_.bitmap_ & (match ? dbitmap : ~dbitmap)) != BITMAP_EMPTY) {
+                return binmap_t::_find_complement(b.left(), dbitmap, sc.left_.bitmap_, twist, match);
             }
 
         } else {
             if (sc.is_right_ref_) {
                 SPUSH(b.right(), sc.right_.ref_, twist);
                 continue;
-            } else if ((sc.right_.bitmap_ & ~dbitmap) != BITMAP_EMPTY) {
-                return binmap_t::_find_complement(b.right(), dbitmap, sc.right_.bitmap_, twist);
+            } else if ((sc.right_.bitmap_ & (match ? dbitmap : ~dbitmap)) != BITMAP_EMPTY) {
+                return binmap_t::_find_complement(b.right(), dbitmap, sc.right_.bitmap_, twist, match);
             }
         }
     } while (_top_ > 0);
@@ -1304,8 +1604,9 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const bitmap_t dbitmap, const
 }
 
 
-bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binmap_t& destination, const bitmap_t sbitmap, const bin_t::uint_t twist)
+bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binmap_t& destination, const bitmap_t sbitmap, const bin_t::uint_t twist, bool match)
 {
+
     /* Initialization */
     DSTACK();
     DPUSH(bin, dref, twist);
@@ -1319,8 +1620,8 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binma
                 DPUSH(b.left(), dc.left_.ref_, twist);
                 continue;
 
-            } else if ((sbitmap & ~dc.left_.bitmap_) != BITMAP_EMPTY) {
-                return binmap_t::_find_complement(b.left(), dc.left_.bitmap_, sbitmap, twist);
+            } else if ((sbitmap & (match ? dc.left_.bitmap_ : ~dc.left_.bitmap_)) != BITMAP_EMPTY) {
+                return binmap_t::_find_complement(b.left(), dc.left_.bitmap_, sbitmap, twist, match);
             }
 
         } else {
@@ -1328,8 +1629,8 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binma
                 DPUSH(b.right(), dc.right_.ref_, twist);
                 continue;
 
-            } else if ((sbitmap & ~dc.right_.bitmap_) != BITMAP_EMPTY) {
-                return binmap_t::_find_complement(b.right(), dc.right_.bitmap_, sbitmap, twist);
+            } else if ((sbitmap & (match ? dc.right_.bitmap_ : ~dc.right_.bitmap_)) != BITMAP_EMPTY) {
+                return binmap_t::_find_complement(b.right(), dc.right_.bitmap_, sbitmap, twist, match);
             }
         }
     } while (_top_ > 0);
@@ -1338,9 +1639,14 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const ref_t dref, const binma
 }
 
 
-bin_t binmap_t::_find_complement(const bin_t& bin, const bitmap_t dbitmap, const bitmap_t sbitmap, bin_t::uint_t twist)
+bin_t binmap_t::_find_complement(const bin_t& bin, const bitmap_t dbitmap, const bitmap_t sbitmap, bin_t::uint_t twist, bool match)
 {
-    bitmap_t bitmap = sbitmap & ~dbitmap;
+    bitmap_t bitmap;
+    /* check weather we want a match */
+    if (match)
+        bitmap = sbitmap & dbitmap;
+    else
+        bitmap = sbitmap & ~dbitmap;
 
     assert (bitmap != BITMAP_EMPTY);
 
@@ -1364,9 +1670,9 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const bitmap_t dbitmap, const
             bitmap = ((bitmap & 0x00ff) << 8)  | ((bitmap & 0xff00) >> 8);
         }
 
-        // Arno, 2012-03-21: Do workaround (see below) here as well?
-
-        return bin_t(bin.base_left().twisted(twist & ~0x0f).toUInt() + bitmap_to_bin(bitmap)).to_twisted(twist & 0x0f);
+        // Ric,  2013-09-09: Solved
+        uint32_t offset = bin.base_left().twisted(twist & ~0x0f).toUInt() & ~31;
+        return bin_t(offset + bitmap_to_bin(bitmap)).to_twisted(twist & 0x0f);
 
     } else {
         if (twist & 1) {
@@ -1385,39 +1691,10 @@ bin_t binmap_t::_find_complement(const bin_t& bin, const bitmap_t dbitmap, const
             bitmap = ((bitmap & 0x0000ffff) << 16)  | ((bitmap & 0xffff0000) >> 16);
         }
 
-        bin_t diff = bin_t(bin.base_left().twisted(twist & ~0x1f).toUInt() + bitmap_to_bin(bitmap)).to_twisted(twist & 0x1f);
+        // Ric: 2013-09 bug fix
+        uint32_t offset = bin.base_left().twisted(twist & ~0x1f).toUInt() & ~63;
+        return bin_t( offset + bitmap_to_bin(bitmap)).to_twisted(twist & 0x1f);
 
-        // Arno, 2012-03-21: Sanity check, if it fails, attempt workaround
-        if (!bin.contains(diff))
-        {
-        	// Bug: Proposed bin is outside of specified range. The bug appears
-        	// to be that the code assumes that the range parameter (called bin
-        	// here) is aligned on a 32-bit boundary. I.e. the width of a
-        	// half_t. Hence when the code does range + bitmap_to_bin(x)
-        	// to find the base-layer offset of the bit on which the source
-        	// and dest bitmaps differ, the result may be too high.
-        	//
-        	// What I do here is to round the rangestart to 32 bits, and
-        	// then add bitmap_to_bin(bitmap), divided by two as that function
-        	// returns the bit in a "bin number" format (=bit * 2).
-        	//
-        	// In other words, the "bin" parameter should tell us at what
-        	// base offset of the 32-bit dbitmap and sbitmap is. At the moment
-        	// it doesn't always, because "bin" is not rounded to 32-bit.
-        	//
-        	// see tests/binstest3.cpp
-
-        	bin_t::uint_t rangestart = bin.base_left().twisted(twist & ~0x1f).layer_offset();
-        	bin_t::uint_t b2b = bitmap_to_bin(bitmap);
-        	bin_t::uint_t absoff = ((int)(rangestart/32))*32 + b2b/2;
-
-        	diff = bin_t(0,absoff);
-        	diff = diff.to_twisted(twist & 0x1f);
-
-        	//char binstr[32];
-        	//fprintf(stderr,"__fc solution %s\n", diff.str(binstr) );
-        }
-        return diff;
     }
 }
 
@@ -1503,6 +1780,26 @@ void binmap_t::fill(const binmap_t& source)
     cell.is_right_ref_ = false;
     cell.left_.bitmap_ = BITMAP_FILLED;
     cell.right_.bitmap_ = BITMAP_FILLED;
+}
+
+
+/**
+ * Empty the binmap. Creates a new empty binmap. Size is given by the length of the content
+ */
+void binmap_t::empty(const int size)
+{
+	bin_t b(0, (size-1)>>1);
+
+	while (!root_bin_.contains(b))
+		root_bin_.to_parent();
+
+	fprintf(stderr, "root:%s\n",root_bin_.str().c_str());
+    cell_t& cell = cell_[ROOT_REF];
+
+    cell.is_left_ref_ = false;
+    cell.is_right_ref_ = false;
+    cell.left_.bitmap_ = BITMAP_EMPTY;
+    cell.right_.bitmap_ = BITMAP_EMPTY;
 }
 
 

@@ -4,10 +4,10 @@
 # Requirements:
 #  - scons: Cross-platform build system    http://www.scons.org/
 #  - libevent2: Event driven network I/O   http://www.libevent.org/
-#    * Install in \build\libevent-2.0.14-stable
-# For debugging:
+#    * Set install path below >= 2.0.17
+# For unittests:
 #  - googletest: Google C++ Test Framework http://code.google.com/p/googletest/
-#       * Install in \build\gtest-1.4.0
+#       * Set install path in tests/SConscript
 #
 
 
@@ -16,16 +16,17 @@ import re
 import sys
 
 DEBUG = True
+CODECOVERAGE = (DEBUG and True)
 
 TestDir='tests'
 
 target = 'swift'
 source = [ 'bin.cpp', 'binmap.cpp', 'sha1.cpp','hashtree.cpp',
     	   'transfer.cpp', 'channel.cpp', 'sendrecv.cpp', 'send_control.cpp', 
-    	   'compat.cpp','avgspeed.cpp', 'avail.cpp', 'cmdgw.cpp', 
-           'storage.cpp', 'zerostate.cpp', 'zerohashtree.cpp','Socks5Connection.cpp']
+    	   'compat.cpp','avgspeed.cpp', 'avail.cpp', 'cmdgw.cpp', 'httpgw.cpp',
+           'storage.cpp', 'zerostate.cpp', 'zerohashtree.cpp',
+           'api.cpp', 'content.cpp', 'live.cpp', 'swarmmanager.cpp', 'address.cpp','Socks5Connection.cpp']
 # cmdgw.cpp now in there for SOCKTUNNEL
-
 env = Environment()
 if sys.platform == "win32":
     libevent2path = '\\build\\libevent-2.0.19-stable'

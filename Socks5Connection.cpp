@@ -163,7 +163,7 @@ int Socks5Connection::tryReadUdpAssociateResponse(struct bufferevent * bev){
 		this->setBindAddress(bind_address);
 		this->setCurrentState(UdpAssociated);
 
-		printf("Socks5 UDP proxy ready at %s:%d\n", bind_address.ipv4str(), bind_address.port());
+		printf("Socks5 UDP proxy ready at %s\n", bind_address.ipstr(true).c_str());
 
 //		this->setUDPsocket(AF_INET, SOCK_DGRAM, 0)
 
@@ -324,7 +324,7 @@ void Socks5Connection::connect(){
 	bufferevent_enable(bev, EV_READ|EV_WRITE);
 
 	if(bufferevent_socket_connect(bev, (struct sockaddr*)&(address.addr), addrlen)){
-		errorOut("Cannot connect to SOCKS5 proxy at %s:%d\n",address.ipv4str(), address.port());
+		errorOut("Cannot connect to SOCKS5 proxy at %s\n",address.ipstr(true).c_str());
 		bufferevent_free(bev);
 
 		return;
@@ -370,7 +370,7 @@ int Socks5Connection::prependHeader(const Address & addr, struct evbuffer * evb)
 
 	delete buff;
 
-	//printf("Prepending Socks5 header to UDP packet destined to %s:%d \r\n", header.address.ipv4str(),header.address.port());
+	//printf("Prepending Socks5 header to UDP packet destined to %s:%d \r\n", header.address.ipstr(),header.address.port());
 
 	return 10;
 }

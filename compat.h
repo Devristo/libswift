@@ -3,7 +3,7 @@
  *  compatibility wrappers
  *
  *  Created by Arno Bakker, Victor Grishchenko
- *  Copyright 2009-2012 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
+ *  Copyright 2009-2016 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
 #ifndef SWIFT_COMPAT_H
@@ -19,15 +19,20 @@ typedef int int32_t;
 typedef __int64 int64_t;
 typedef unsigned __int64 uint64_t;
 #else
+// Arno, 2013-06-11: Must be defined to get SIZE_MAX in C++
+#define  __STDC_LIMIT_MACROS
 #include <stdint.h>
 #endif
 
 #ifdef _WIN32
+#define NOMINMAX
 #include <winsock2.h>
 #include <sys/stat.h>
 #include <io.h>
-#include <xutility> // for std::min/max
+#include <algorithm> // for std::min/max
 #include <direct.h>
+#include <In6addr.h>
+#include <Ws2tcpip.h>
 #else
 #include <sys/mman.h>
 #include <arpa/inet.h>
@@ -39,11 +44,13 @@ typedef unsigned __int64 uint64_t;
 #include <sys/stat.h>
 #endif
 
+#include <limits.h>
 #include <fcntl.h>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <errno.h>
+#include <math.h>
 
 #ifdef _MSC_VER
 #include "getopt_win.h"
@@ -77,7 +84,9 @@ typedef void* setsockoptptr_t;
 
 // libevent2 assumes WIN32 is defined
 #ifdef _WIN32
+#ifndef WIN32
 #define WIN32	_WIN32
+#endif
 #endif
 #include <event2/util.h>
 
@@ -86,21 +95,24 @@ typedef void* setsockoptptr_t;
 #endif
 
 #ifndef LONG_MAX
-#include <limits>
 #define LONG_MAX	numeric_limits<int>::max()
 #endif
 
-#ifdef _WIN32
+#ifndef log2
 // log2 is C99 which is not fully supported by MS VS
 #define log2(x)		(log(x)/log(2.0))
 #endif
 
 
 // Arno, 2012-01-05: Handle 64-bit size_t & printf+scanf
+#ifndef SIZE_MAX
+#error SIZE_MAX undefined, check stdint.h and __STDC_LIMIT_MACROS
+#endif
+
 #if SIZE_MAX > UINT_MAX
-#define PRISIZET		"%llu"
+#define PRISIZET	"%llu"
 #else
-#define PRISIZET	"%lu"
+#define PRISIZET	"%u"
 #endif
 
 #ifdef _WIN32
@@ -124,10 +136,8 @@ typedef void* setsockoptptr_t;
 #ifdef _WIN32
 #define FILE_SEP          "\\"
 #else
-#define FILE_SEP		  "/"
+#define FILE_SEP	  "/"
 #endif
-
-
 
 namespace swift {
 
@@ -185,12 +195,15 @@ int mkdir_utf8(std::string dirname);
 // remove with filename in UTF-8
 int remove_utf8(std::string pathname);
 
-
 // opendir() + readdir() UTF-8 versions
 class DirEntry
 {
   public:
-	DirEntry(std::string filename, bool isdir) : filename_(filename), isdir_(isdir) {}
+#ifdef _WIN32
+        DirEntry(std::string filename, bool isdir) : filename_(filename), isdir_(isdir), hFind_(0) {}
+#else
+	DirEntry(std::string filename, bool isdir) : filename_(filename), isdir_(isdir), dirp_(NULL) {}
+#endif
 	std::string filename_;
 	bool isdir_;
 
@@ -208,11 +221,8 @@ DirEntry *opendir_utf8(std::string pathname);
 // Returns NULL on error, last entry. Automatically does closedir()
 DirEntry *readdir_utf8(DirEntry *prevde);
 
-// return directory part of filename or ""
-std::string dirname_utf8(std::string pathname);
 
-// return non-directory part of filename
-std::string basename_utf8(std::string pathname);
+std::string dirname_utf8(std::string pathname);
 
 /*
  * Other filename-less functions
@@ -262,7 +272,6 @@ int inline stringreplace(std::string& source, const std::string& find, const std
     }
     return num;
 }
-
 
 std::string hex2bin(std::string input);
 

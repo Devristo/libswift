@@ -3,7 +3,7 @@
  *  congestion control logic for the swift protocol
  *
  *  Created by Victor Grishchenko on 12/10/09.
- *  Copyright 2009-2012 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
+ *  Copyright 2009-2016 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
 
@@ -62,6 +62,7 @@ tint    Channel::SwitchSendControl (send_control_t control_mode) {
             break;
         default:
             assert(false);
+            break;
     }
     send_control_ = control_mode;
     return NextSendTime();
@@ -74,7 +75,13 @@ tint    Channel::KeepAliveNextSendTime () {
         return SwitchSendControl(SLOW_START_CONTROL);
     if (data_in_.time!=TINT_NEVER)
         return NOW;
-	/* Gertjan fix 5f51e5451e3785a74c058d9651b2d132c5a94557
+
+    if (live_have_no_hint_)
+    {
+	live_have_no_hint_ = false;
+	return NOW;
+    }
+    /* Gertjan fix 5f51e5451e3785a74c058d9651b2d132c5a94557
     "Do not increase send interval in keep-alive mode when previous Reschedule
     was already in the future.
     The problem this solves is that when we keep on receiving packets in keep-alive
@@ -90,7 +97,7 @@ tint    Channel::KeepAliveNextSendTime () {
     // Arno: Fix that doesn't do exponential growth always, only after sends
     // without following recvs
 
-    // fprintf(stderr,"KeepAliveNextSendTime: gotka %d sentka %d ss %d si %lli\n", lastrecvwaskeepalive_, lastsendwaskeepalive_, sent_since_recv_, send_interval_);
+    //dprintf("KeepAliveNextSendTime: gotka %d sentka %d ss %d si %lli rtt %lli\n", lastrecvwaskeepalive_, lastsendwaskeepalive_, sent_since_recv_, send_interval_, rtt_avg_ );
 
     if (lastrecvwaskeepalive_ && lastsendwaskeepalive_)
     {
@@ -119,6 +126,7 @@ tint    Channel::KeepAliveNextSendTime () {
 }
 
 tint    Channel::PingPongNextSendTime () { // FIXME INFINITE LOOP
+    //fprintf(stderr,"PING: dgrams %d ackrec %d dataintime %lli lastrecv %lli lastsend %lli\n", dgrams_sent_, ack_rcvd_recent_, data_in_.time, last_recv_time_, last_send_time_);
     if (dgrams_sent_>=10)
         return SwitchSendControl(KEEP_ALIVE_CONTROL);
     if (ack_rcvd_recent_)
@@ -135,14 +143,14 @@ tint    Channel::PingPongNextSendTime () { // FIXME INFINITE LOOP
 tint    Channel::CwndRateNextSendTime () {
     if (data_in_.time!=TINT_NEVER)
         return NOW; // TODO: delayed ACKs
-    //if (last_recv_time_<NOW-rtt_avg_*4)
-    //    return SwitchSendControl(KEEP_ALIVE_CONTROL);
+    if (last_recv_time_<NOW-rtt_avg_*4)
+        return SwitchSendControl(KEEP_ALIVE_CONTROL);
     send_interval_ = rtt_avg_/cwnd_;
     if (send_interval_>max(rtt_avg_,TINT_SEC)*4)
         return SwitchSendControl(KEEP_ALIVE_CONTROL);
     if (data_out_.size()<cwnd_) {
-        dprintf("%s #%u sendctrl next in %llius (cwnd %.2f, data_out %i)\n",
-                tintstr(),id_,send_interval_,cwnd_,(int)data_out_.size());
+        dprintf("%s #%u sendctrl next in %lldus (cwnd %.2f, data_out %u)\n",
+	    tintstr(),id_,send_interval_,cwnd_,data_out_.size());
         return last_data_out_time_ + send_interval_;
     } else {
         assert(data_out_.front().time!=TINT_NEVER);
@@ -189,12 +197,17 @@ tint Channel::LedbatNextSendTime () {
     float oldcwnd = cwnd_;
 
     tint owd_cur(TINT_NEVER), owd_min(TINT_NEVER);
-    for(int i=0; i<4; i++) {
+    // Ric: TODO for the moment we only use one sample!!
+    /*for(int i=0; i<4; i++) {
         if (owd_min>owd_min_bins_[i])
             owd_min = owd_min_bins_[i];
         if (owd_cur>owd_current_[i])
             owd_cur = owd_current_[i];
-    }
+    }*/
+    // ---
+    owd_min = owd_min_bins_[0];
+    owd_cur = owd_current_[0];
+    // ---
     if (ack_not_rcvd_recent_)
         BackOffOnLosses(0.8);
     ack_rcvd_recent_ = 0;
@@ -207,7 +220,7 @@ tint Channel::LedbatNextSendTime () {
         cwnd_ = 1;
 
     //Arno, 2012-02-02: Somehow LEDBAT gets stuck at cwnd_ == 1 sometimes
-    // This hack appears to work to get it back on the right track quickly.
+    /* This hack appears to work to get it back on the right track quickly.
     if (oldcwnd == 1 && cwnd_ == 1)
        cwnd_count1_++;
     else
@@ -215,14 +228,21 @@ tint Channel::LedbatNextSendTime () {
     if (cwnd_count1_ > 10)
     {
         dprintf("%s #%u sendctrl ledbat stuck, reset\n",tintstr(),id() );
-	cwnd_count1_ = 0;
+
+        // test
+        tint now = NOW;
+        //for (int i = -1; i<2; i++) {
+            lprintf("%d \t %d \t %d \t %d \t %d \t %d \t %d \n", now, 0, 0, 0, 0, 0, 6000);
+        //}
+
+        cwnd_count1_ = 0;
         for(int i=0; i<4; i++) {
             owd_min_bins_[i] = TINT_NEVER;
             owd_current_[i] = TINT_NEVER;
         }
-    }
+    }*/
 
-    dprintf("%s #%u sendctrl ledbat %lli-%lli => %3.2f\n",
+    dprintf("%s #%u sendctrl ledbat %lld-%lld => %3.2f\n",
             tintstr(),id_,owd_cur,owd_min,cwnd_);
     return CwndRateNextSendTime();
 }

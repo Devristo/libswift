@@ -8,7 +8,7 @@ import os
 import unittest
 from threading import Event, Thread, currentThread, Condition
 from socket import error as socketerror
-from time import sleep
+import time
 from traceback import print_exc
 import shutil
 import random
@@ -16,6 +16,8 @@ import socket
 import subprocess
 
 from M2Crypto import Rand
+
+from testasserver import TestAsServer
 
 DEBUG = False
 
@@ -49,53 +51,26 @@ class UDPListener(Thread):
             self.testcase.notify()
 
 
-class TestTunnel(unittest.TestCase):
+class TestTunnel(TestAsServer):
     """
-    Test for swift ability to tunnel data from CMD TCP connections over UDP.
+    Test for swift's ability to tunnel data from CMD TCP connections over UDP.
     """
     
-    def setUp(self):
+    def setUpPreSession(self):
+        TestAsServer.setUpPreSession(self)
         
         self.cond = Condition()
         
         self.peer1port = 1234
         self.peer1 = UDPListener(self,self.peer1port)
         self.peer1.start()
-        
-        self.binpath = os.path.join("..","swift")
+
         self.destdir = "."
         
-        self.cmdport = random.randint(11001,11999)  # NSSA control socket
-        self.httpport = random.randint(12001,12999) # content web server
-        self.swiftport = random.randint(13001,13999) # content web server
-        
-        # Security: only accept commands from localhost, enable HTTP gw, 
-        # no stats/webUI web server
-        args=[]
-        args.append(str(self.binpath))
-        args.append("-c") # command port
-        args.append("127.0.0.1:"+str(self.cmdport))
-        args.append("-g") # HTTP gateway port
-        args.append("127.0.0.1:"+str(self.httpport))
-        args.append("-l")
-        args.append("127.0.0.1:"+str(self.swiftport))
-        args.append("-o")
-        args.append(str(self.destdir))
-        args.append("-w")
-        args.append("-B") # DEBUG Hack
-        args.append("swiftout.log")         
-        
-        print >>sys.stderr,"test: SwiftProcess: Running",args
-        
-        self.popen = subprocess.Popen(args,close_fds=True,cwd=self.destdir) 
-
         self.udpsendport = random.randint(14001,14999) #
 
-        sleep(2) # let server threads start
+        time.sleep(2) # let server threads start
 
-    def tearDown(self):
-        sleep(5)
-        self.popen.kill()
 
     def notify(self):
         self.cond.acquire()
@@ -127,7 +102,7 @@ class TestTunnel(unittest.TestCase):
             self.data = Rand.rand_bytes(self.randsize)
             cmd = "TUNNELSEND 127.0.0.1:"+str(self.peer1port)+"/ffffffff "+str(self.randsize)+"\r\n";
             self.s.send(cmd)
-            sleep(.1)
+            time.sleep(.1)
             self.s.send(self.data)
             # Read at UDPListener
             self.wait()
@@ -163,7 +138,7 @@ class TestTunnel(unittest.TestCase):
             # Send data over UDP
             print >>sys.stderr,"test: TCP: Sending swift UDP bytes",self.randsize
             swiftmsg = "\xff\xff\xff\xff"+self.data
-            nsend = self.s2.sendto(swiftmsg,0,("127.0.0.1",self.swiftport))
+            nsend = self.s2.sendto(swiftmsg,0,("127.0.0.1",self.listenport))
 
             # Receive data via TCP 
             print >>sys.stderr,"test: TCP: Recv"

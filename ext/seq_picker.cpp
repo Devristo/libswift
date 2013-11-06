@@ -3,7 +3,7 @@
  *  swift
  *
  *  Created by Victor Grishchenko on 10/6/09.
- *  Copyright 2009-2012 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
+ *  Copyright 2009-2016 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
 
@@ -43,7 +43,7 @@ public:
         range_ = range;
     }
 
-    virtual bin_t Pick (binmap_t& offer, uint64_t max_width, tint expires) {
+    virtual bin_t Pick (binmap_t& offer, uint64_t max_width, tint expires, uint32_t channelid) {
         while (hint_out_.size() && hint_out_.front().time<NOW-TINT_SEC*3/2) { // FIXME sec
             binmap_t::copy(ack_hint_out_, *(hashtree()->ack_out()), hint_out_.front().bin);
             hint_out_.pop_front();

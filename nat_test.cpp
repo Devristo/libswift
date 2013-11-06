@@ -47,7 +47,7 @@ static void on_may_receive(SOCKET sock) {
     if ((magic != REPLY_MAGIC && magic != REPLY_SEC_MAGIC) ||
             (magic == REPLY_MAGIC && data.size() != 6) || (magic == REPLY_SEC_MAGIC && data.size() != 0))
     {
-        dprintf("%s #0 NATTEST weird packet %s \n", tintstr(), data.address().str());
+        dprintf("%s #0 NATTEST weird packet %s \n", tintstr(), data.address().str().c_str());
         return;
     }
 
@@ -55,9 +55,9 @@ static void on_may_receive(SOCKET sock) {
         uint32_t ip = data.Pull32();
         uint16_t port = data.Pull16();
         Address reported(ip, port);
-        dprintf("%s #0 NATTEST incoming %s %s\n", tintstr(), data.address().str(), reported.str());
+        dprintf("%s #0 NATTEST incoming %s %s\n", tintstr(), data.address().str().c_str(), reported.str().c_str());
     } else {
-        dprintf("%s #0 NATTEST incoming secondary %s\n", tintstr(), data.address().str());
+        dprintf("%s #0 NATTEST incoming secondary %s\n", tintstr(), data.address().str().c_str());
     }
     packets_since_last_try++;
 }
@@ -80,7 +80,7 @@ static void on_may_send(SOCKET sock) {
         dprintf("%s #0 NATTEST could not get local address\n", tintstr());
     } else {
         Address local(ntohl(name.sin_addr.s_addr), ntohs(name.sin_port));
-        dprintf("%s #0 NATTEST local %s\n", tintstr(), local.str());
+        dprintf("%s #0 NATTEST local %s\n", tintstr(), local.str().c_str());
     }
 }
 
@@ -133,27 +133,5 @@ static void printAddresses(void) {
 #endif
 }
 
-
-void nat_test_update(void) {
-    static bool initialized;
-    if (!initialized) {
-        initialized = true;
-        printAddresses();
-    }
-
-    if (tries < MAX_TRIES && NOW - test_start > 30 * TINT_SEC) {
-        if (tries == 0) {
-            Address any;
-            SOCKET sock = Datagram::Bind(any, callbacks);
-            callbacks.sock = sock;
-        } else if (packets_since_last_try == 0) {
-            // Keep on trying if we didn't receive _any_ packet in response to our last request
-            tries--;
-        }
-        tries++;
-        callbacks.may_write = on_may_send;
-        Datagram::Listen3rdPartySocket(callbacks);
-    }
-}
 
 }

@@ -3,7 +3,7 @@
  *  swift
  *
  *  Created by Victor Grishchenko on 10/7/09.
- *  Copyright 2009-2012 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
+ *  Copyright 2009-2016 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
 //#include <gtest/gtest.h>
@@ -48,9 +48,11 @@ TEST(TransferTest,TransferFile) {
     //}
     
     // now, submit a new file
-    
-    FileTransfer* seed_transfer = new FileTransfer(BTF);
-    MmapHashTree* seed = seed_transfer->hashtree();
+
+    int file = swift::Open(BTF);
+    //Arno, 2013-01-07: Don't know how much longer using API this way will work
+    FileTransfer* seed_transfer = new FileTransfer(file, BTF);
+    HashTree* seed = seed_transfer->hashtree();
     EXPECT_TRUE(A==seed->hash(bin_t(0,0)));
     EXPECT_TRUE(E==seed->hash(bin_t(0,4)));
     EXPECT_TRUE(ABCD==seed->hash(bin_t(2,0)));
@@ -61,14 +63,18 @@ TEST(TransferTest,TransferFile) {
     EXPECT_EQ(4100,seed->size());
     EXPECT_EQ(5,seed->size_in_chunks());
     EXPECT_EQ(4100,seed->complete());
-    EXPECT_EQ(4100,seed->seq_complete());
+    //Elric: Is this function still doing the same?
+    EXPECT_EQ(4100,seed->seq_complete(0));
     EXPECT_EQ(bin_t(2,0),seed->peak(0));
 
     // retrieve it
     unlink("copy");
-    FileTransfer* leech_transfer = new FileTransfer("copy",seed->root_hash());
-    MmapHashTree* leech = leech_transfer->hashtree();
-    leech_transfer->picker().Randomize(0);
+    //int copy = swift::Open("copy");
+    int copy=567;
+    //Arno, 2013-01-07: Don't know how much longer using API this way will work
+    FileTransfer* leech_transfer = new FileTransfer(copy, "copy",seed->root_hash());
+    HashTree* leech = leech_transfer->hashtree();
+    leech_transfer->picker()->Randomize(0);
     // transfer peak hashes
     for(int i=0; i<seed->peak_count(); i++)
         leech->OfferHash(seed->peak(i),seed->peak_hash(i));
@@ -82,16 +88,17 @@ TEST(TransferTest,TransferFile) {
     //  AAAA BBBB  CCCC DDDD  E  0  0  0
     // calculated leech->OfferHash(bin64_t(1,0), seed->hashes[bin64_t(1,0)]);
     leech->OfferHash(bin_t(1,1), seed->hash(bin_t(1,1)));
+    bin_t next(0,0);
     for (int i=0; i<5; i++) {
         if (i==2) { // now: stop, save, start
             delete leech_transfer;
-            leech_transfer = new FileTransfer("copy",seed->root_hash(),false);
+            leech_transfer = new FileTransfer(copy, "copy",seed->root_hash(),false);
             leech = leech_transfer->hashtree();
-            leech_transfer->picker().Randomize(0);
+            //leech_transfer->picker()->Randomize(0);
             EXPECT_EQ(2,leech->chunks_complete());
             EXPECT_EQ(bin_t(2,0),leech->peak(0));
         }
-        bin_t next = leech_transfer->picker().Pick(seed->ack_out(),1,TINT_NEVER);
+
         ASSERT_NE(bin_t::NONE,next);
         ASSERT_TRUE(next.base_offset()<5);
         uint8_t buf[1024];         //size_t len = seed->storer->ReadData(next,&buf);
@@ -105,11 +112,16 @@ TEST(TransferTest,TransferFile) {
         fprintf(stderr,"offer of bad data was refused, OK\n");
         *buf = memo;
         EXPECT_TRUE(leech->OfferData(next, (char*)buf, len));
+
+        // Arno, 2013-01-07: VodPiecePicker works differently from old SeqPicker
+        // Does make test less complete.
+        next = bin_t(0,next.base_offset()+1);
     }
     EXPECT_EQ(4100,leech->size());
     EXPECT_EQ(5,leech->size_in_chunks());
     EXPECT_EQ(4100,leech->complete());
-    EXPECT_EQ(4100,leech->seq_complete());
+    //TODO: Is this function still doing the same?
+    EXPECT_EQ(4100,leech->seq_complete(0));
 
 }
 /*
@@ -119,17 +131,23 @@ TEST(TransferTest,TransferFile) {
 
 int main (int argc, char** argv) {
 
+    // Arno: required
+    LibraryInit();
+    Channel::evbase = event_base_new();
+
+
     unlink("test_file");
     unlink("copy");
     unlink("test_file.mhash");
     unlink("copy.mhash");
 
-	int f = open(BTF,O_RDWR|O_CREAT|O_TRUNC,S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
-	if (f < 0)
-	{
-		eprintf("Error opening %s\n",BTF);
-		return -1;
-	}
+    int f = open(BTF,O_RDWR|O_CREAT|O_TRUNC,S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
+    if (f < 0)
+    {
+	eprintf("Error opening %s\n",BTF);
+	return -1;
+    }
+
     uint8_t buf[1024];
     memset(buf,'A',1024);
     A = Sha1Hash(buf,1024);
@@ -146,10 +164,11 @@ int main (int argc, char** argv) {
     memset(buf,'E',4);
     E = Sha1Hash(buf,4);
     write(f,buf,4);
-	close(f);
 
-	testing::InitGoogleTest(&argc, argv);
-	int ret = RUN_ALL_TESTS();
+    close(f);
+
+    testing::InitGoogleTest(&argc, argv);
+    int ret = RUN_ALL_TESTS();
 
     return ret;
 }

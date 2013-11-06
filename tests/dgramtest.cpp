@@ -3,7 +3,7 @@
  *  serp++
  *
  *  Created by Victor Grishchenko on 3/13/09.
- *  Copyright 2009-2012 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
+ *  Copyright 2009-2016 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
 #include <gtest/gtest.h>
@@ -30,12 +30,9 @@ TEST(Datagram, AddressTest) {
 
 
 TEST(Datagram, BinaryTest) {
-	evutil_socket_t socket = Channel::Bind(7001);
+	evutil_socket_t socket = Channel::Bind(Address("0.0.0.0",7001));
 	ASSERT_TRUE(socket>0);
-	struct sockaddr_in addr;
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(7001);
-	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	Address destaddr("127.0.0.1",7001);
 	const char * text = "text";
 	const uint8_t num8 = 0xab;
 	const uint16_t num16 = 0xabcd;
@@ -55,7 +52,7 @@ TEST(Datagram, BinaryTest) {
 	    sprintf(buf+i*2,"%02x",*(data+i));
 	buf[i*2] = 0;
 	EXPECT_STREQ("74657874ababcdabcdef01000abcdefabcdeff",buf);
-	ASSERT_EQ(datalen,Channel::SendTo(socket, addr, snd));
+	ASSERT_EQ(datalen,Channel::SendTo(socket, destaddr, snd));
 	evbuffer_free(snd);
 	event_assign(&evrecv, evbase, socket, EV_READ, ReceiveCallback, NULL);
 	event_add(&evrecv, NULL);

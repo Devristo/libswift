@@ -1,4 +1,5 @@
-# Written by Arno Bakker, Jie Yang
+# Written by Arno Bakker
+#
 # see LICENSE.txt for license information
 
 import unittest
@@ -12,100 +13,15 @@ import time
 import subprocess
 import urllib2
 import string
+import binascii
 from traceback import print_exc
 
-DEBUG=False
+from testasserver import TestAsServer
+from SwiftDef import SwiftDef
 
-class TestAsServer(unittest.TestCase):
-    """ 
-    Parent class for testing the server-side of Tribler
-    """
-    
-    def setUp(self):
-        """ unittest test setup code """
-        # Main UDP listen socket
-        self.setUpPreSession()
-        
-        # Security: only accept commands from localhost, enable HTTP gw, 
-        # no stats/webUI web server
-        args=[]
-        args.append(str(self.binpath))
-        if self.listenport is not None:
-            args.append("-l") # listen port
-            args.append("0.0.0.0:"+str(self.listenport))
-        if self.cmdport is not None:            
-            args.append("-c") # command port
-            args.append("127.0.0.1:"+str(self.cmdport))
-        if self.httpport is not None:
-            args.append("-g") # HTTP gateway port
-            args.append("127.0.0.1:"+str(self.httpport))
-        if self.destdir is not None:
-            args.append("-o") # destdir
-            args.append(self.destdir)
-        if self.filename is not None:
-            args.append("-f") # filename
-            args.append(self.filename)
-            
-        args.append("-B") # DEBUG Hack        
-        
-        if DEBUG:
-            print >>sys.stderr,"SwiftProcess: __init__: Running",args,"workdir",self.workdir
-
-        self.stdoutfile = tempfile.NamedTemporaryFile(delete=False)       
-        
-        #self.popen = subprocess.Popen(args,stdout=subprocess.PIPE,cwd=self.workdir)
-        self.popen = subprocess.Popen(args,stdout=self.stdoutfile,cwd=self.workdir) 
-
-        self.setUpPostSession()
-
-    def setUpPreSession(self):
-        self.binpath = os.path.join("..","swift") 
-        self.listenport = random.randint(10001,10999)  
-        # NSSA control socket
-        self.cmdport = random.randint(11001,11999)  
-        # content web server
-        self.httpport = random.randint(12001,12999)
-            
-        self.workdir = '.' 
-        self.destdir = None
-        self.filename = None
-
-    def setUpPostSession(self):
-        pass
-
-    def tearDown(self):
-        """ unittest test tear down code """
-        if self.popen is not None:
-            self.popen.kill()
+DEBUG=True
 
 
-
-MULTIFILE_PATHNAME = "META-INF-multifilespec.txt"
-
-def filelist2spec(filelist):
-    # TODO: verify that this gives same sort as C++ CreateMultiSpec
-    filelist.sort()    
-        
-    specbody = ""
-    totalsize = 0L
-    for pathname,flen in filelist:
-        specbody += pathname+" "+str(flen)+"\n"
-        totalsize += flen
-        
-    specsize = len(MULTIFILE_PATHNAME)+1+0+1+len(specbody)
-    numstr = str(specsize)
-    numstr2 = str(specsize+len(str(numstr)))
-    if (len(numstr) == len(numstr2)):
-        specsize += len(numstr)
-    else:
-        specsize += len(numstr)+(len(numstr2)-len(numstr))
-    
-    spec = MULTIFILE_PATHNAME+" "+str(specsize)+"\n"
-    spec += specbody
-    return spec
-    
-    
-    
 def bytestr2int(b):
     if b == "":
         return None
@@ -163,14 +79,14 @@ def rangestr2triple(rangestr,length):
     
     
 
-class TestFrameMultiFileSeek(TestAsServer):
+class TstMultiFileSeekFramework(TestAsServer):
     """
-    Framework for multi-file tests.
+    Framework for multi-file swarm tests, consisting of HTTP GET Range requests
+    to the various files in the multi-file swarm.
     """
 
     def setUpPreSession(self):
         TestAsServer.setUpPreSession(self)
-        self.cmdport = None
         self.destdir = tempfile.mkdtemp()
         
         print >>sys.stderr,"test: destdir is",self.destdir
@@ -182,6 +98,8 @@ class TestFrameMultiFileSeek(TestAsServer):
         
         prefixdir = os.path.join(self.destdir,specprefix)
         os.mkdir(prefixdir)
+
+        sdef = SwiftDef()
         
         # Create content
         for fn,s in self.filelist:
@@ -191,16 +109,21 @@ class TestFrameMultiFileSeek(TestAsServer):
             data = fn[len(specprefix)+1] * s
             f.write(data)
             f.close()
-        
-        # Create spec
-        self.spec = filelist2spec(self.filelist)
-        
-        fullpath = os.path.join(self.destdir,MULTIFILE_PATHNAME)
-        f = open(fullpath,"wb")
-        f.write(self.spec)
+            
+            sdef.add_content(fullpath,fn)
+
+        self.specfn = sdef.finalize(self.binpath,destdir=self.destdir)
+        f = open(self.specfn,"rb")
+        self.spec = f.read()
         f.close()
         
-        self.filename = fullpath
+        self.swarmid = sdef.get_id()
+        print >>sys.stderr,"test: setUpPreSession: roothash is",binascii.hexlify(self.swarmid)
+        
+        self.mfdestfn = os.path.join(self.destdir,binascii.hexlify(self.swarmid))
+        shutil.copyfile(self.specfn,self.mfdestfn)
+        shutil.copyfile(self.specfn+".mhash",self.mfdestfn+".mhash")
+        shutil.copyfile(self.specfn+".mbinmap",self.mfdestfn+".mbinmap")
 
     def setUpFileList(self):
         self.filelist = []
@@ -209,25 +132,14 @@ class TestFrameMultiFileSeek(TestAsServer):
     def setUpPostSession(self):
         TestAsServer.setUpPostSession(self)
         
-        # Allow it to write root hash
-        time.sleep(2)
+        #CMD = "START tswift:/"+binascii.hexlify(self.swarmid)+" "+self.destdir+"\r\n"
+        CMD = "START tswift://127.0.0.1:"+str(self.listenport)+"/"+binascii.hexlify(self.swarmid)+" "+self.destdir+"\r\n"
+        self.cmdsock.send(CMD)
         
-        f = open(self.stdoutfile.name,"rb")
-        output = f.read(1024)
-        f.close()
-        
-        prefix = "Root hash: "
-        idx = output.find(prefix)
-        if idx != -1:
-            self.roothashhex = output[idx+len(prefix):idx+len(prefix)+40]
-        else:
-            self.assert_(False,"Could not read roothash from swift output")
-            
-        print >>sys.stderr,"test: setUpPostSession: roothash is",self.roothashhex
-        
-        self.urlprefix = "http://127.0.0.1:"+str(self.httpport)+"/"+self.roothashhex
+        self.urlprefix = "http://127.0.0.1:"+str(self.httpport)+"/"+binascii.hexlify(self.swarmid)
 
-    def test_read_all(self):
+    def tst_read_all(self):
+        print >>sys.stderr,"test: tst_read_all"
         
         url = self.urlprefix        
         req = urllib2.Request(url)
@@ -253,21 +165,26 @@ class TestFrameMultiFileSeek(TestAsServer):
         self.assertEqual(offset, len(data), "returned less content than expected" )
         
 
-    def test_read_file0(self):
+    def tst_read_file0(self):
+        print >>sys.stderr,"test: tst_read_file0"
+        
         wanttup = self.filelist[0]
-        self._test_read_file(wanttup)
+        self._tst_read_file(wanttup)
 
-    def test_read_file1(self):
+    def tst_read_file1(self):
+        print >>sys.stderr,"test: tst_read_file1"
+        
         if len(self.filelist) > 1:
             wanttup = self.filelist[1]
-            self._test_read_file(wanttup)
+            self._tst_read_file(wanttup)
         
-    def test_read_file2(self):
+    def tst_read_file2(self):
+        print >>sys.stderr,"test: tst_read_file2"
         if len(self.filelist) > 2:
             wanttup = self.filelist[2]
-            self._test_read_file(wanttup)
+            self._tst_read_file(wanttup)
 
-    def _test_read_file(self,wanttup):
+    def _tst_read_file(self,wanttup):
         url = self.urlprefix+"/"+wanttup[0]    
         req = urllib2.Request(url)
         resp = urllib2.urlopen(req)
@@ -285,31 +202,37 @@ class TestFrameMultiFileSeek(TestAsServer):
                 
         self.assertEqual(len(content), len(data), "returned less content than expected" )
 
-    def test_read_file0_range(self):
+    def tst_read_file0_range(self):
+        print >>sys.stderr,"test: tst_read_file0_range"
+        
         wanttup = self.filelist[0]
-        self._test_read_file_range(wanttup,"-2")
-        self._test_read_file_range(wanttup,"0-2")
-        self._test_read_file_range(wanttup,"2-")
-        self._test_read_file_range(wanttup,"4-10")
+        self._tst_read_file_range(wanttup,"-2")
+        self._tst_read_file_range(wanttup,"0-2")
+        self._tst_read_file_range(wanttup,"2-")
+        self._tst_read_file_range(wanttup,"4-10")
 
-    def test_read_file1_range(self):
+    def tst_read_file1_range(self):
+        print >>sys.stderr,"test: tst_read_file1_range"
+        
         if len(self.filelist) > 1:
             wanttup = self.filelist[1]
-            self._test_read_file_range(wanttup,"-2")
-            self._test_read_file_range(wanttup,"0-2")
-            self._test_read_file_range(wanttup,"2-")
-            self._test_read_file_range(wanttup,"4-10")
+            self._tst_read_file_range(wanttup,"-2")
+            self._tst_read_file_range(wanttup,"0-2")
+            self._tst_read_file_range(wanttup,"2-")
+            self._tst_read_file_range(wanttup,"4-10")
 
-    def test_read_file2_range(self):
+    def tst_read_file2_range(self):
+        print >>sys.stderr,"test: tst_read_file2_range"
+        
         if len(self.filelist) > 2:
             wanttup = self.filelist[2]
-            self._test_read_file_range(wanttup,"-2")
-            self._test_read_file_range(wanttup,"0-2")
-            self._test_read_file_range(wanttup,"2-")
-            self._test_read_file_range(wanttup,"4-10")
+            self._tst_read_file_range(wanttup,"-2")
+            self._tst_read_file_range(wanttup,"0-2")
+            self._tst_read_file_range(wanttup,"2-")
+            self._tst_read_file_range(wanttup,"4-10")
 
 
-    def _test_read_file_range(self,wanttup,rangestr):
+    def _tst_read_file_range(self,wanttup,rangestr):
         url = self.urlprefix+"/"+wanttup[0]    
         req = urllib2.Request(url)
         val = "bytes="+rangestr
@@ -337,7 +260,7 @@ class TestFrameMultiFileSeek(TestAsServer):
         self.assertEqual(nbytes, len(data), "returned less content than expected" )
 
 
-class TestMFSAllAbove1K(TestFrameMultiFileSeek):
+class TestMFSAllAbove1K(TstMultiFileSeekFramework):
     """ 
     Concrete test of files all > 1024 bytes
     """
@@ -348,8 +271,29 @@ class TestMFSAllAbove1K(TestFrameMultiFileSeek):
         self.filelist.append(("MyCollection/harry.ts",5000))
         self.filelist.append(("MyCollection/sjaak.ts",24567))
 
+    def test_read_all(self):
+        self.tst_read_all()
 
-class TestMFS1stSmall(TestFrameMultiFileSeek):
+    def test_read_file0(self):
+        self.tst_read_file0()
+
+    def test_read_file1(self):
+        self.tst_read_file1()
+        
+    def test_read_file2(self):
+        self.tst_read_file2()
+
+    def test_read_file0_range(self):
+        self.tst_read_file0_range()
+
+    def test_read_file1_range(self):
+        self.tst_read_file1_range()
+
+    def test_read_file2_range(self):
+        self.tst_read_file2_range()
+
+
+class TestMFS1stSmall(TstMultiFileSeekFramework):
     """ 
     Concrete test with 1st file fitting in 1st chunk (i.e. spec+file < 1024)
     """
@@ -358,6 +302,27 @@ class TestMFS1stSmall(TestFrameMultiFileSeek):
         self.filelist.append(("MyCollection/anita.ts",123))
         self.filelist.append(("MyCollection/harry.ts",5000))
         self.filelist.append(("MyCollection/sjaak.ts",24567))
+
+    def test_read_all(self):
+        self.tst_read_all()
+
+    def test_read_file0(self):
+        self.tst_read_file0()
+
+    def test_read_file1(self):
+        self.tst_read_file1()
+        
+    def test_read_file2(self):
+        self.tst_read_file2()
+
+    def test_read_file0_range(self):
+        self.tst_read_file0_range()
+
+    def test_read_file1_range(self):
+        self.tst_read_file1_range()
+
+    def test_read_file2_range(self):
+        self.tst_read_file2_range()
 
 
 def test_suite():

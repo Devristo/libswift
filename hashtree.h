@@ -3,7 +3,7 @@
  *  hashing, Merkle hash trees and data integrity
  *
  *  Created by Victor Grishchenko on 3/6/09.
- *  Copyright 2009-2012 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
+ *  Copyright 2009-2016 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
 #ifndef SWIFT_SHA1_HASH_TREE_H
@@ -36,7 +36,8 @@ struct Sha1Hash {
         { return 0==memcmp(bits,b.bits,SIZE); }
     bool    operator != (const Sha1Hash& b) const { return !(*this==b); }
     const char* operator * () const { return (char*) bits; }
-    
+    Sha1Hash & operator = (const Sha1Hash &source);
+
     const static Sha1Hash ZERO;
     const static size_t SIZE = HASHSZ;
 };
@@ -63,7 +64,7 @@ class Storage;
  */
 class HashTree : public Operational {
   public:
-	HashTree() : Operational() {}
+    HashTree() : Operational() {}
     /** Offer a hash; returns true if it verified; false otherwise.
      Once it cannot be verified (no sibling or parent), the hash
      is remembered, while returning false. */
@@ -98,7 +99,7 @@ class HashTree : public Operational {
     virtual bool            is_complete ()  = 0;
     /** The binmap of complete chunks. */
     virtual binmap_t *      ack_out() = 0;
-    virtual uint32_t		chunk_size()  = 0; // CHUNKSIZE
+    virtual uint32_t        chunk_size()  = 0; // CHUNKSIZE
 
     //NETWVSHASH
     virtual bool get_check_netwvshash() = 0;
@@ -106,8 +107,6 @@ class HashTree : public Operational {
 
     // for transfertest.cpp
     virtual Storage *       get_storage() = 0;
-    virtual std::string     get_hash_filename() = 0;
-    virtual std::string     get_binmap_filename() = 0;
     virtual void            set_size(uint64_t size) = 0;
 
     virtual int TESTGetFD() = 0;
@@ -127,10 +126,7 @@ class MmapHashTree : public HashTree, Serializable {
     int             peak_count_;
     /** File descriptor to put hashes to */
     int             hash_fd_;
-    /** Filename of hashes */
     std::string     hash_filename_;
-    /** Filename of serialized ack_out_ */
-    std::string     binmap_filename_;
     std::string	    filename_; // for easy serialization
     /** Base size, as derived from the hashes. */
     uint64_t        size_;
@@ -141,28 +137,28 @@ class MmapHashTree : public HashTree, Serializable {
     /**    Binmap of own chunk availability */
     binmap_t        ack_out_;
 
-	// CHUNKSIZE
-	/** Arno: configurable fixed chunk size in bytes */
-    uint32_t	    chunk_size_;
+    // CHUNKSIZE
+    /** Arno: configurable fixed chunk size in bytes */
+    uint32_t        chunk_size_;
 
     // LESSHASH
-    binmap_t	    is_hash_verified_; // binmap being abused as bitmap, only layer 0 used
+    binmap_t        is_hash_verified_; // binmap being abused as bitmap, only layer 0 used
     // FAXME: make is_hash_verified_ part of persistent state?
 
     //MULTIFILE
-    Storage *	     storage_;
+    Storage *	    storage_;
 
-    int 	     internal_deserialize(FILE *fp,bool contentavail=true);
+    int             internal_deserialize(FILE *fp,bool contentavail=true);
 
     //NETWVSHASH
-    bool 			check_netwvshash_;
+    bool            check_netwvshash_;
 
 protected:
     
     int             OpenHashFile();
     void            Submit();
     void            RecoverProgress();
-    bool 	    RecoverPeakHashes();
+    bool            RecoverPeakHashes();
     Sha1Hash        DeriveRoot();
     bool            OfferPeakHash (bin_t pos, const Sha1Hash& hash);
 
@@ -192,14 +188,12 @@ public:
     uint64_t        chunks_complete () const { return completec_; }
     uint64_t        seq_complete(int64_t offset); // SEEK
     bool            is_complete () { return size_ && complete_==size_; }
-    binmap_t *       ack_out () { return &ack_out_; }
-    uint32_t		chunk_size() { return chunk_size_; } // CHUNKSIZE
+    binmap_t *      ack_out () { return &ack_out_; }
+    uint32_t        chunk_size() { return chunk_size_; } // CHUNKSIZE
     ~MmapHashTree ();
 
     // for transfertest.cpp
     Storage *       get_storage() { return storage_; }
-    std::string	    get_hash_filename() { return hash_filename_; }
-    std::string	    get_binmap_filename() { return binmap_filename_; }
     void            set_size(uint64_t size) { size_ = size; }
 
     // Arno: persistent storage for state other than hashes (which are in .mhash)
@@ -217,7 +211,7 @@ public:
 
 
 /** This class implements the HashTree interface by reading directly from disk */
-class ZeroHashTree : public HashTree  {
+class ZeroHashTree : public HashTree {
     /** Merkle hash tree: root */
     Sha1Hash        root_hash_;
     /** Merkle hash tree: peak hashes */
@@ -235,25 +229,21 @@ class ZeroHashTree : public HashTree  {
 
     // CHUNKSIZE
     /** Arno: configurable fixed chunk size in bytes */
-    uint32_t			chunk_size_;
+    uint32_t        chunk_size_;
 
     //MULTIFILE
-    Storage *		storage_;
-    /** Filename of hashes */
-    std::string     hash_filename_;
-    /** Filename of serialized ack_out_ */
-    std::string     binmap_filename_;
+    Storage *       storage_;
 
 protected:
 
-    bool 			RecoverPeakHashes();
+    bool            RecoverPeakHashes();
     Sha1Hash        DeriveRoot();
     bool            OfferPeakHash (bin_t pos, const Sha1Hash& hash);
 
 public:
 
     ZeroHashTree (Storage *storage, const Sha1Hash& root=Sha1Hash::ZERO, uint32_t chunk_size=SWIFT_DEFAULT_CHUNK_SIZE,
-              std::string hash_filename="", std::string binmap_filename="");
+              std::string hash_filename=NULL, std::string binmap_filename=NULL);
 
     // Arno, 2012-01-03: Hack to quickly learn root hash from a checkpoint
     ZeroHashTree (bool dummy, std::string binmap_filename);
@@ -274,16 +264,13 @@ public:
     uint64_t        complete () const { return complete_; }
     uint64_t        chunks_complete () const { return completec_; }
     uint64_t        seq_complete(int64_t offset); // SEEK
-	bool            is_complete () { return size_ && complete_==size_; }
+    bool            is_complete () { return size_ && complete_==size_; }
     binmap_t *       ack_out () { return NULL; }
-    uint32_t		chunk_size() { return chunk_size_; } // CHUNKSIZE
+    uint32_t        chunk_size() { return chunk_size_; } // CHUNKSIZE
     ~ZeroHashTree ();
 
     // for transfertest.cpp
     Storage *       get_storage() { return storage_; }
-    std::string	    get_hash_filename() { return hash_filename_; }
-    std::string	    get_binmap_filename() { return binmap_filename_; }
-
     void            set_size(uint64_t size) { size_ = size; }
 
     //NETWVSHASH

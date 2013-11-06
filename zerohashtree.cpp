@@ -4,10 +4,10 @@
  *  file on disk directly, to save memory.
  *
  *  Created by Victor Grishchenko, Arno Bakker
- *  Copyright 2009-2012 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
+ *  Copyright 2009-2016 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
-
+#include "compat.h"
 #include "hashtree.h"
 #include "bin_utils.h"
 //#include <openssl/sha.h>
@@ -16,7 +16,6 @@
 #include <cstring>
 #include <cstdlib>
 #include <fcntl.h>
-#include "compat.h"
 #include "swift.h"
 
 #include <iostream>
@@ -29,12 +28,12 @@ using namespace swift;
 
 
 ZeroHashTree::ZeroHashTree (Storage *storage, const Sha1Hash& root_hash, uint32_t chunk_size, std::string hash_filename, std::string binmap_filename) :
-HashTree(), storage_(storage), root_hash_(root_hash), peak_count_(0), hash_fd_(0),
+ HashTree(), root_hash_(root_hash), peak_count_(0), hash_fd_(0),
  size_(0), sizec_(0), complete_(0), completec_(0),
-chunk_size_(chunk_size), hash_filename_(hash_filename), binmap_filename_(binmap_filename)
+ chunk_size_(chunk_size), storage_(storage)
 {
-	// MULTIFILE
-	storage_->SetHashTree(this);
+    // MULTIFILE
+    storage_->SetHashTree(this);
 
     hash_fd_ = open_utf8(hash_filename.c_str(),ROOPENFLAGS,S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
     if (hash_fd_<0) {
@@ -45,8 +44,8 @@ chunk_size_(chunk_size), hash_filename_(hash_filename), binmap_filename_(binmap_
 
     if (!RecoverPeakHashes())
     {
-    	dprintf("%s zero hashtree could not recover peak hashes, fatal\n",tintstr() );
-    	SetBroken();
+        dprintf("%s zero hashtree could not recover peak hashes, fatal\n",tintstr() );
+        SetBroken();
     }
 }
 
@@ -55,7 +54,7 @@ bool ZeroHashTree::RecoverPeakHashes()
 {
     int64_t ret = storage_->GetReservedSize();
     if (ret < 0)
-	return false;
+        return false;
 
     uint64_t size = ret;
     uint64_t sizek = (size + chunk_size_-1) / chunk_size_;
@@ -81,8 +80,7 @@ bool ZeroHashTree::RecoverPeakHashes()
 
 
 bool            ZeroHashTree::OfferPeakHash (bin_t pos, const Sha1Hash& hash) {
-	char bin_name_buf[32];
-	dprintf("%s zero hashtree offer peak %s\n",tintstr(),pos.str(bin_name_buf));
+    dprintf("%s zero hashtree offer peak %s\n",tintstr(),pos.str().c_str());
 
     //assert(!size_);
     if (peak_count_) {
@@ -104,7 +102,7 @@ bool            ZeroHashTree::OfferPeakHash (bin_t pos, const Sha1Hash& hash) {
     // bingo, we now know the file size (rounded up to a chunk_size() unit)
 
     if (!size_) // MULTIFILE: not known from spec
-    	size_ = sizec_ * chunk_size_;
+        size_ = sizec_ * chunk_size_;
     // completec_ = complete_ = 0;
     sizec_ = (size_ + chunk_size_-1) / chunk_size_;
 
@@ -114,7 +112,7 @@ bool            ZeroHashTree::OfferPeakHash (bin_t pos, const Sha1Hash& hash) {
 
 Sha1Hash        ZeroHashTree::DeriveRoot () {
 
-	dprintf("%s zero hashtree deriving root\n",tintstr() );
+    dprintf("%s zero hashtree deriving root\n",tintstr() );
 
     int c = peak_count_-1;
     bin_t p = peaks_[c];
@@ -139,29 +137,30 @@ Sha1Hash        ZeroHashTree::DeriveRoot () {
 }
 
 const Sha1Hash& ZeroHashTree::peak_hash (int i) const {
-	 // switch to peak_hashes_ when caching enabled
-	return hash(peak(i));
+     // switch to peak_hashes_ when caching enabled
+    return hash(peak(i));
 }
 
 
 const Sha1Hash& ZeroHashTree::hash (bin_t pos) const
 {
-		// RISKY BUSINESS
-		static Sha1Hash hash;
-        int ret = file_seek(hash_fd_,pos.toUInt()*sizeof(Sha1Hash));
-        if (ret < 0)
-        {
-        	print_error("reading zero hashtree");
-        	return Sha1Hash::ZERO;
-        }
-        ret = read(hash_fd_,&hash,sizeof(Sha1Hash));
-        if (ret < 0 || ret !=sizeof(Sha1Hash))
-            return Sha1Hash::ZERO;
-        else
-		{
-			//fprintf(stderr,"read hash %llu %s\n", pos.toUInt(), hash.hex().c_str() );
-        	return hash;
-		}
+    // RISKY BUSINESS
+    static Sha1Hash hash;
+    
+    int ret = file_seek(hash_fd_,pos.toUInt()*sizeof(Sha1Hash));
+    if (ret < 0)
+    {
+        print_error("reading zero hashtree");
+        return Sha1Hash::ZERO;
+    }
+    ret = read(hash_fd_,&hash,sizeof(Sha1Hash));
+    if (ret < 0 || ret !=sizeof(Sha1Hash))
+        return Sha1Hash::ZERO;
+    else
+    {
+        //fprintf(stderr,"read hash %llu %s\n", pos.toUInt(), hash.hex().c_str() );
+        return hash;
+    }
 }
 
 
@@ -175,20 +174,19 @@ bin_t         ZeroHashTree::peak_for (bin_t pos) const
 
 bool            ZeroHashTree::OfferHash (bin_t pos, const Sha1Hash& hash)
 {
-	return false;
+    return false;
 }
 
 
 bool            ZeroHashTree::OfferData (bin_t pos, const char* data, size_t length)
 {
-	return false;
+    return false;
 }
 
 
 uint64_t      ZeroHashTree::seq_complete (int64_t offset)
 {
-	fprintf(stderr,"ZeroHashTree: seq_complete returns %llu\n", size_ ); 
-	return size_;
+    return size_;
 }
 
 

@@ -3,7 +3,7 @@
  *  serp++
  *
  *  Created by Victor Grishchenko on 3/19/09.
- *  Copyright 2009-2012 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
+ *  Copyright 2009-2016 TECHNISCHE UNIVERSITEIT DELFT. All rights reserved.
  *
  */
 #include <sys/stat.h>
@@ -38,16 +38,16 @@ TEST(Connection,CwndTest) {
     size = st.st_size;//, sizek = (st.st_size>>10) + (st.st_size%1024?1:0) ;
     Channel::SELF_CONN_OK = true;
 
-    int sock1 = swift::Listen(7001);
+    int sock1 = swift::Listen(Address("0.0.0.0",7001));
     ASSERT_TRUE(sock1>=0);
 
     int file = swift::Open("test_file0.dat");
-    FileTransfer* fileobj = FileTransfer::file(file);
+    FileTransfer fileobj = FileTransfer(file, "test_file0.dat");
     //FileTransfer::instance++;
 
     swift::SetTracker(Address("127.0.0.1",7001));
 
-    copy = swift::Open("test_file0-copy.dat",fileobj->root_hash());
+    copy = swift::Open("test_file0-copy.dat",fileobj.swarm_id());
 
     evtimer_assign(&evcompl, Channel::evbase, IsCompleteCallback, NULL);
     evtimer_add(&evcompl, tint2tv(TINT_SEC));
@@ -63,7 +63,7 @@ TEST(Connection,CwndTest) {
     swift::Close(file);
     swift::Close(copy);
 
-    swift::Shutdown(sock1);
+    swift::Shutdown();
 
 }
 
